@@ -1201,6 +1201,8 @@ void qemu_savevm_state_pending(QEMUFile *f, uint64_t max_size,
                                uint64_t *res_non_postcopiable,
                                uint64_t *res_postcopiable)
 {
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "begin");
+    
     SaveStateEntry *se;
 
     *res_non_postcopiable = 0;
@@ -1219,6 +1221,8 @@ void qemu_savevm_state_pending(QEMUFile *f, uint64_t max_size,
         se->ops->save_live_pending(f, se->opaque, max_size,
                                    res_non_postcopiable, res_postcopiable);
     }
+
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "end");
 }
 
 void qemu_savevm_state_cleanup(void)

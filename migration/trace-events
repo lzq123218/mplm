@@ -1,5 +1,10 @@
 # See docs/tracing.txt for syntax documentation.
 
+# mplm tracing
+mplm_print_txt(const char *file, int line, const char *func, const char *txt) "%s:%d:%s > %s"
+mplm_print_bool(const char *file, int line, const char *func, const char *txt, bool val) "%s:%d:%s > %s %d"
+mplm_print_uint64(const char *file, int line, const char *func, const char *txt, uint64_t val) "%s:%d:%s > %s %" PRIu64
+
 # migration/savevm.c
 qemu_loadvm_state_section(unsigned int section_type) "%d"
 qemu_loadvm_state_section_command(int ret) "%d"

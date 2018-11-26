@@ -72,10 +72,14 @@
  */
 #define DEFAULT_MIGRATE_X_CHECKPOINT_DELAY 200
 
+#define DEFAULT_MIGRATION_COMPLETION_DELAY 500
+
 static NotifierList migration_state_notifiers =
     NOTIFIER_LIST_INITIALIZER(migration_state_notifiers);
 
 static bool deferred_incoming;
+
+static bool do_migration_completion;
 
 /*
  * Current state of incoming postcopy; note this is not part of
@@ -1904,12 +1908,21 @@ bool migrate_colo_enabled(void)
     return s->enabled_capabilities[MIGRATION_CAPABILITY_X_COLO];
 }
 
+void qmp_migrate_do_migration_completion(Error **errp)
+{
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "call");
+    qmp_stop(errp);
+    do_migration_completion = true;
+}
+
 /*
  * Master migration thread on the source VM.
  * It drives the migration and pumps the data down the outgoing channel.
  */
 static void *migration_thread(void *opaque)
 {
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "begin");
+
     MigrationState *s = opaque;
     /* Used by the bandwidth calcs, updated later */
     int64_t initial_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
@@ -1918,11 +1931,18 @@ static void *migration_thread(void *opaque)
     int64_t max_size = 0;
     int64_t start_time = initial_time;
     int64_t end_time;
+    int64_t last_migration_completion_time;
     bool old_vm_running = false;
     bool entered_postcopy = false;
     /* The active state we expect to be in; ACTIVE or POSTCOPY_ACTIVE */
     enum MigrationStatus current_active_state = MIGRATION_STATUS_ACTIVE;
     bool enable_colo = migrate_colo_enabled();
+    bool precopy_ram_manual_completion = s->enabled_capabilities[MIGRATION_CAPABILITY_PRECOPY_RAM_MANUAL_COMPLETION];
+
+    do_migration_completion = false;
+    last_migration_completion_time = -1;
+
+    trace_mplm_print_bool(__FILE__, __LINE__, __PRETTY_FUNCTION__, "precopy_ram_manual_completion", precopy_ram_manual_completion);
 
     rcu_register_thread();
 
@@ -1984,9 +2004,35 @@ static void *migration_thread(void *opaque)
                 qemu_savevm_state_iterate(s->to_dst_file, entered_postcopy);
             } else {
                 trace_migration_thread_low_pending(pending_size);
-                migration_completion(s, current_active_state,
-                                     &old_vm_running, &start_time);
-                break;
+                if (!migrate_postcopy_ram() && precopy_ram_manual_completion) {
+
+                    trace_mplm_print_bool(__FILE__, __LINE__, __PRETTY_FUNCTION__,
+                                "do_migration_completion", do_migration_completion);
+
+                    if (do_migration_completion) {
+                        migration_completion(s, current_active_state,
+                                        &old_vm_running, &start_time);
+                        break;
+                    } else {
+                        current_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+                        if (last_migration_completion_time < 0) {
+                            last_migration_completion_time = 
+                                current_time - DEFAULT_MIGRATION_COMPLETION_DELAY;
+                        } 
+
+                        uint64_t diff = current_time - last_migration_completion_time;
+                        last_migration_completion_time = current_time;
+
+                        if (DEFAULT_MIGRATION_COMPLETION_DELAY > diff) {
+                            /* usleep expects microseconds */
+                            g_usleep((DEFAULT_MIGRATION_COMPLETION_DELAY - diff) * 1000);
+                        }
+                    }
+                } else {
+                    migration_completion(s, current_active_state,
+                                        &old_vm_running, &start_time);
+                    break;
+                }
             }
         }
 
@@ -2069,6 +2115,8 @@ static void *migration_thread(void *opaque)
     }
     qemu_bh_schedule(s->cleanup_bh);
     qemu_mutex_unlock_iothread();
+
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "end");
 
     rcu_unregister_thread();
     return NULL;

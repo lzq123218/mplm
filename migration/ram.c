@@ -2130,9 +2130,13 @@ static void ram_save_pending(QEMUFile *f, void *opaque, uint64_t max_size,
                              uint64_t *non_postcopiable_pending,
                              uint64_t *postcopiable_pending)
 {
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "begin");
+
     uint64_t remaining_size;
 
     remaining_size = ram_save_remaining() * TARGET_PAGE_SIZE;
+
+    trace_mplm_print_uint64(__FILE__, __LINE__, __PRETTY_FUNCTION__, "remaining_size", remaining_size);
 
     if (!migration_in_postcopy(migrate_get_current()) &&
         remaining_size < max_size) {
@@ -2146,6 +2150,8 @@ static void ram_save_pending(QEMUFile *f, void *opaque, uint64_t max_size,
 
     /* We can do postcopy, and all the data is postcopiable */
     *postcopiable_pending += remaining_size;
+
+    trace_mplm_print_txt(__FILE__, __LINE__, __PRETTY_FUNCTION__, "end");
 }
 
 static int load_xbzrle(QEMUFile *f, ram_addr_t addr, void *host)
