@@ -441,6 +441,24 @@
   'data': { 'pass': 'int' } }
 
 ##
+# @MPLM:
+#
+# Emitted from the source side of a migration
+#
+# @response: A response text
+#
+# Since: 2.9.3
+#
+# Example:
+#
+# { "timestamp": {"seconds": 1449669631, "microseconds": 239225},
+#   "event": "MPLM", "data": {"response": "what ever it send"} }
+#
+##
+{ 'event': 'MPLM',
+  'data': { 'response': 'str' } }
+
+##
 # @ACPI_DEVICE_OST:
 #
 # Emitted when guest executes ACPI _OST method.

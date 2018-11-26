@@ -151,6 +151,7 @@ void hmp_info_mice(Monitor *mon, const QDict *qdict)
     qapi_free_MouseInfoList(mice_list);
 }
 
+// MPLM
 void hmp_info_migrate(Monitor *mon, const QDict *qdict)
 {
     MigrationInfo *info;
@@ -162,36 +163,53 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
     /* do not display parameters during setup */
     if (info->has_status && caps) {
         monitor_printf(mon, "capabilities: ");
+        printf("capabilities: ");
         for (cap = caps; cap; cap = cap->next) {
             monitor_printf(mon, "%s: %s ",
                            MigrationCapability_lookup[cap->value->capability],
                            cap->value->state ? "on" : "off");
+            printf("%s: %s ",
+                           MigrationCapability_lookup[cap->value->capability],
+                           cap->value->state ? "on" : "off");
         }
         monitor_printf(mon, "\n");
+        printf("\n");
     }
 
     if (info->has_status) {
         monitor_printf(mon, "Migration status: %s",
                        MigrationStatus_lookup[info->status]);
+        printf("Migration status: %s",
+                       MigrationStatus_lookup[info->status]);
         if (info->status == MIGRATION_STATUS_FAILED &&
             info->has_error_desc) {
             monitor_printf(mon, " (%s)\n", info->error_desc);
+            printf(" (%s)\n", info->error_desc);
         } else {
             monitor_printf(mon, "\n");
+            printf("\n");
         }
 
         monitor_printf(mon, "total time: %" PRIu64 " milliseconds\n",
                        info->total_time);
+        printf("total time: %" PRIu64 " milliseconds\n",
+                       info->total_time);
         if (info->has_expected_downtime) {
             monitor_printf(mon, "expected downtime: %" PRIu64 " milliseconds\n",
+                           info->expected_downtime);
+            printf("expected downtime: %" PRIu64 " milliseconds\n",
                            info->expected_downtime);
         }
         if (info->has_downtime) {
             monitor_printf(mon, "downtime: %" PRIu64 " milliseconds\n",
                            info->downtime);
+            printf("downtime: %" PRIu64 " milliseconds\n",
+                           info->downtime);
         }
         if (info->has_setup_time) {
             monitor_printf(mon, "setup: %" PRIu64 " milliseconds\n",
+                           info->setup_time);
+            printf("setup: %" PRIu64 " milliseconds\n",
                            info->setup_time);
         }
     }
@@ -199,28 +217,50 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
     if (info->has_ram) {
         monitor_printf(mon, "transferred ram: %" PRIu64 " kbytes\n",
                        info->ram->transferred >> 10);
+        printf("transferred ram: %" PRIu64 " kbytes\n",
+                       info->ram->transferred >> 10);
         monitor_printf(mon, "throughput: %0.2f mbps\n",
+                       info->ram->mbps);
+        printf("throughput: %0.2f mbps\n",
                        info->ram->mbps);
         monitor_printf(mon, "remaining ram: %" PRIu64 " kbytes\n",
                        info->ram->remaining >> 10);
+        printf("remaining ram: %" PRIu64 " kbytes\n",
+                       info->ram->remaining >> 10);
         monitor_printf(mon, "total ram: %" PRIu64 " kbytes\n",
+                       info->ram->total >> 10);
+        printf("total ram: %" PRIu64 " kbytes\n",
                        info->ram->total >> 10);
         monitor_printf(mon, "duplicate: %" PRIu64 " pages\n",
                        info->ram->duplicate);
+        printf("duplicate: %" PRIu64 " pages\n",
+                       info->ram->duplicate);
         monitor_printf(mon, "skipped: %" PRIu64 " pages\n",
+                       info->ram->skipped);
+        printf("skipped: %" PRIu64 " pages\n",
                        info->ram->skipped);
         monitor_printf(mon, "normal: %" PRIu64 " pages\n",
                        info->ram->normal);
+        printf("normal: %" PRIu64 " pages\n",
+                       info->ram->normal);
         monitor_printf(mon, "normal bytes: %" PRIu64 " kbytes\n",
                        info->ram->normal_bytes >> 10);
+        printf("normal bytes: %" PRIu64 " kbytes\n",
+                       info->ram->normal_bytes >> 10);
         monitor_printf(mon, "dirty sync count: %" PRIu64 "\n",
+                       info->ram->dirty_sync_count);
+        printf("dirty sync count: %" PRIu64 "\n",
                        info->ram->dirty_sync_count);
         if (info->ram->dirty_pages_rate) {
             monitor_printf(mon, "dirty pages rate: %" PRIu64 " pages\n",
                            info->ram->dirty_pages_rate);
+            printf("dirty pages rate: %" PRIu64 " pages\n",
+                           info->ram->dirty_pages_rate);
         }
         if (info->ram->postcopy_requests) {
             monitor_printf(mon, "postcopy request count: %" PRIu64 "\n",
+                           info->ram->postcopy_requests);
+            printf("postcopy request count: %" PRIu64 "\n",
                            info->ram->postcopy_requests);
         }
     }
@@ -228,29 +268,49 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
     if (info->has_disk) {
         monitor_printf(mon, "transferred disk: %" PRIu64 " kbytes\n",
                        info->disk->transferred >> 10);
+        printf("transferred disk: %" PRIu64 " kbytes\n",
+                       info->disk->transferred >> 10);
         monitor_printf(mon, "remaining disk: %" PRIu64 " kbytes\n",
                        info->disk->remaining >> 10);
+        printf("remaining disk: %" PRIu64 " kbytes\n",
+                       info->disk->remaining >> 10);
         monitor_printf(mon, "total disk: %" PRIu64 " kbytes\n",
+                       info->disk->total >> 10);
+        printf("total disk: %" PRIu64 " kbytes\n",
                        info->disk->total >> 10);
     }
 
     if (info->has_xbzrle_cache) {
         monitor_printf(mon, "cache size: %" PRIu64 " bytes\n",
                        info->xbzrle_cache->cache_size);
+        printf("cache size: %" PRIu64 " bytes\n",
+                       info->xbzrle_cache->cache_size);
         monitor_printf(mon, "xbzrle transferred: %" PRIu64 " kbytes\n",
+                       info->xbzrle_cache->bytes >> 10);
+        printf("xbzrle transferred: %" PRIu64 " kbytes\n",
                        info->xbzrle_cache->bytes >> 10);
         monitor_printf(mon, "xbzrle pages: %" PRIu64 " pages\n",
                        info->xbzrle_cache->pages);
+        printf("xbzrle pages: %" PRIu64 " pages\n",
+                       info->xbzrle_cache->pages);
         monitor_printf(mon, "xbzrle cache miss: %" PRIu64 "\n",
+                       info->xbzrle_cache->cache_miss);
+        printf("xbzrle cache miss: %" PRIu64 "\n",
                        info->xbzrle_cache->cache_miss);
         monitor_printf(mon, "xbzrle cache miss rate: %0.2f\n",
                        info->xbzrle_cache->cache_miss_rate);
+        printf("xbzrle cache miss rate: %0.2f\n",
+                       info->xbzrle_cache->cache_miss_rate);
         monitor_printf(mon, "xbzrle overflow : %" PRIu64 "\n",
+                       info->xbzrle_cache->overflow);
+        printf("xbzrle overflow : %" PRIu64 "\n",
                        info->xbzrle_cache->overflow);
     }
 
     if (info->has_cpu_throttle_percentage) {
         monitor_printf(mon, "cpu throttle percentage: %" PRIu64 "\n",
+                       info->cpu_throttle_percentage);
+        printf("cpu throttle percentage: %" PRIu64 "\n",
                        info->cpu_throttle_percentage);
     }
 
@@ -258,6 +318,7 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
     qapi_free_MigrationCapabilityStatusList(caps);
 }
 
+// MPLM
 void hmp_info_migrate_capabilities(Monitor *mon, const QDict *qdict)
 {
     MigrationCapabilityStatusList *caps, *cap;
@@ -266,17 +327,23 @@ void hmp_info_migrate_capabilities(Monitor *mon, const QDict *qdict)
 
     if (caps) {
         monitor_printf(mon, "capabilities: ");
+        printf("capabilities: ");
         for (cap = caps; cap; cap = cap->next) {
             monitor_printf(mon, "%s: %s ",
                            MigrationCapability_lookup[cap->value->capability],
                            cap->value->state ? "on" : "off");
+            printf("%s: %s ",
+                           MigrationCapability_lookup[cap->value->capability],
+                           cap->value->state ? "on" : "off");
         }
         monitor_printf(mon, "\n");
+        printf("\n");
     }
 
     qapi_free_MigrationCapabilityStatusList(caps);
 }
 
+// MPLM
 void hmp_info_migrate_parameters(Monitor *mon, const QDict *qdict)
 {
     MigrationParameters *params;
@@ -285,53 +352,89 @@ void hmp_info_migrate_parameters(Monitor *mon, const QDict *qdict)
 
     if (params) {
         monitor_printf(mon, "parameters:");
+        printf("parameters:");
         assert(params->has_compress_level);
         monitor_printf(mon, " %s: %" PRId64,
+            MigrationParameter_lookup[MIGRATION_PARAMETER_COMPRESS_LEVEL],
+            params->compress_level);
+        printf(" %s: %" PRId64,
             MigrationParameter_lookup[MIGRATION_PARAMETER_COMPRESS_LEVEL],
             params->compress_level);
         assert(params->has_compress_threads);
         monitor_printf(mon, " %s: %" PRId64,
             MigrationParameter_lookup[MIGRATION_PARAMETER_COMPRESS_THREADS],
             params->compress_threads);
+        printf(" %s: %" PRId64,
+            MigrationParameter_lookup[MIGRATION_PARAMETER_COMPRESS_THREADS],
+            params->compress_threads);
         assert(params->has_decompress_threads);
         monitor_printf(mon, " %s: %" PRId64,
+            MigrationParameter_lookup[MIGRATION_PARAMETER_DECOMPRESS_THREADS],
+            params->decompress_threads);
+        printf(" %s: %" PRId64,
             MigrationParameter_lookup[MIGRATION_PARAMETER_DECOMPRESS_THREADS],
             params->decompress_threads);
         assert(params->has_cpu_throttle_initial);
         monitor_printf(mon, " %s: %" PRId64,
             MigrationParameter_lookup[MIGRATION_PARAMETER_CPU_THROTTLE_INITIAL],
             params->cpu_throttle_initial);
+        printf(" %s: %" PRId64,
+            MigrationParameter_lookup[MIGRATION_PARAMETER_CPU_THROTTLE_INITIAL],
+            params->cpu_throttle_initial);
+        assert(params->has_cpu_throttle_increment);
         assert(params->has_cpu_throttle_increment);
         monitor_printf(mon, " %s: %" PRId64,
+            MigrationParameter_lookup[MIGRATION_PARAMETER_CPU_THROTTLE_INCREMENT],
+            params->cpu_throttle_increment);
+        printf(" %s: %" PRId64,
             MigrationParameter_lookup[MIGRATION_PARAMETER_CPU_THROTTLE_INCREMENT],
             params->cpu_throttle_increment);
         monitor_printf(mon, " %s: '%s'",
             MigrationParameter_lookup[MIGRATION_PARAMETER_TLS_CREDS],
             params->has_tls_creds ? params->tls_creds : "");
+        printf(" %s: '%s'",
+            MigrationParameter_lookup[MIGRATION_PARAMETER_TLS_CREDS],
+            params->has_tls_creds ? params->tls_creds : "");
         monitor_printf(mon, " %s: '%s'",
+            MigrationParameter_lookup[MIGRATION_PARAMETER_TLS_HOSTNAME],
+            params->has_tls_hostname ? params->tls_hostname : "");
+        printf(" %s: '%s'",
             MigrationParameter_lookup[MIGRATION_PARAMETER_TLS_HOSTNAME],
             params->has_tls_hostname ? params->tls_hostname : "");
         assert(params->has_max_bandwidth);
         monitor_printf(mon, " %s: %" PRId64 " bytes/second",
             MigrationParameter_lookup[MIGRATION_PARAMETER_MAX_BANDWIDTH],
             params->max_bandwidth);
+        printf(" %s: %" PRId64 " bytes/second",
+            MigrationParameter_lookup[MIGRATION_PARAMETER_MAX_BANDWIDTH],
+            params->max_bandwidth);
         assert(params->has_downtime_limit);
         monitor_printf(mon, " %s: %" PRId64 " milliseconds",
+            MigrationParameter_lookup[MIGRATION_PARAMETER_DOWNTIME_LIMIT],
+            params->downtime_limit);
+        printf(" %s: %" PRId64 " milliseconds",
             MigrationParameter_lookup[MIGRATION_PARAMETER_DOWNTIME_LIMIT],
             params->downtime_limit);
         assert(params->has_x_checkpoint_delay);
         monitor_printf(mon, " %s: %" PRId64,
             MigrationParameter_lookup[MIGRATION_PARAMETER_X_CHECKPOINT_DELAY],
             params->x_checkpoint_delay);
+        printf(" %s: %" PRId64,
+            MigrationParameter_lookup[MIGRATION_PARAMETER_X_CHECKPOINT_DELAY],
+            params->x_checkpoint_delay);
         monitor_printf(mon, "\n");
+        printf("\n");
     }
 
     qapi_free_MigrationParameters(params);
 }
 
+// MPLM
 void hmp_info_migrate_cache_size(Monitor *mon, const QDict *qdict)
 {
     monitor_printf(mon, "xbzrel cache size: %" PRId64 " kbytes\n",
+                   qmp_query_migrate_cache_size(NULL) >> 10);
+    printf("xbzrel cache size: %" PRId64 " kbytes\n",
                    qmp_query_migrate_cache_size(NULL) >> 10);
 }
 
@@ -1191,6 +1294,44 @@ void hmp_drive_mirror(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, &err);
 }
 
+// MPLM modification begin
+void hmp_set_mplm_extend_live(Monitor *mon, const QDict *qdict)
+{
+    qmp_set_mplm_extend_live(NULL);
+}
+
+void hmp_set_mplm_end_live(Monitor *mon, const QDict *qdict)
+{
+    qmp_set_mplm_end_live(NULL);
+}
+
+void hmp_set_mplm_migration(Monitor *mon, const QDict *qdict)
+{
+    int64_t intervaltime = qdict_get_int(qdict, "intervaltime");
+    int64_t dirtypercents = qdict_get_int(qdict, "dirtypercents");
+    bool enable = qdict_get_try_bool(qdict, "enable", false);
+    bool firstnondirty = qdict_get_try_bool(qdict, "firstnondirty", false);
+    bool relaxlivemig = qdict_get_try_bool(qdict, "relaxlivemig", false);
+    Error *err = NULL;
+
+
+    if(enable){
+      if(firstnondirty){
+        printf("MPLM enabled firstNondirty intervaltime = %"PRId64 " dirtypercents = %"PRId64 " relaxlivemig = %d \n", intervaltime, dirtypercents, (int)relaxlivemig); 
+      }
+      else{
+        printf("MPLM enabled firstRoundDirty intervaltime = %"PRId64 " dirtypercents = %"PRId64 " relaxlivemig = %d\n", intervaltime, dirtypercents, (int)relaxlivemig); 
+      }
+    }
+    else{
+        printf("MPLM disable (not in use: intervaltime = %"PRId64 " dirtypercents = %"PRId64 ")\n", intervaltime, dirtypercents); 
+    }
+
+    qmp_set_mplm_migration(enable, firstnondirty, intervaltime, relaxlivemig, dirtypercents, &err);
+    hmp_handle_error(mon, &err);
+}
+// MPLM modification end
+
 void hmp_drive_backup(Monitor *mon, const QDict *qdict)
 {
     const char *device = qdict_get_str(qdict, "device");
@@ -1245,6 +1386,149 @@ void hmp_snapshot_blkdev(Monitor *mon, const QDict *qdict)
                                !!format, format,
                                true, mode, &err);
     hmp_handle_error(mon, &err);
+}
+
+// MPLCR
+int mplcr_snapshot_flag = 0; 
+int mplcr_snapshot_array_size = 0; 
+
+#define MPLCR_SNAPSHOT_STR_LEN   150
+#define MPLCR_SNAPSHOT_MAX_ITEMS 20
+
+struct mplcr_snapshot {
+    char *device;
+    char *filename;
+    char *format;
+    bool reuse;
+    enum NewImageMode mode;
+} mplcr_snapshot_array[MPLCR_SNAPSHOT_MAX_ITEMS];
+
+void hmp_snapshot_blkdev_mplcr(Monitor *mon, const QDict *qdict)
+{
+    const char *device = qdict_get_str(qdict, "device");
+    const char *filename = qdict_get_try_str(qdict, "snapshot-file");
+    const char *format = qdict_get_try_str(qdict, "format");
+    bool reuse = qdict_get_try_bool(qdict, "reuse", false);
+    enum NewImageMode mode;
+    Error *err = NULL;
+
+    mplcr_snapshot_flag = 1; 
+
+    if (mplcr_snapshot_array_size >= MPLCR_SNAPSHOT_MAX_ITEMS){
+        printf("too many mplcr snapshot items\n"); 
+        error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
+        hmp_handle_error(mon, &err);
+        return;
+    }
+
+    if (!filename) {
+        /* In the future, if 'snapshot-file' is not specified, the snapshot
+           will be taken internally. Today it's actually required. */
+        error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
+        hmp_handle_error(mon, &err);
+        return;
+    }
+
+    if (strlen(device) >= MPLCR_SNAPSHOT_STR_LEN) {
+        printf("device name too long\n"); 
+        error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
+        hmp_handle_error(mon, &err);
+        return;
+    }
+
+    if (strlen(filename) >= MPLCR_SNAPSHOT_STR_LEN) {
+        printf("filename name too long\n"); 
+        error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
+        hmp_handle_error(mon, &err);
+        return;
+    }
+
+    if (strlen(format) >= MPLCR_SNAPSHOT_STR_LEN) {
+        printf("format name too long\n"); 
+        error_setg(&err, QERR_MISSING_PARAMETER, "snapshot-file");
+        hmp_handle_error(mon, &err);
+        return;
+    }
+
+    if(device != NULL){
+        mplcr_snapshot_array[mplcr_snapshot_array_size].device 
+            = g_malloc0(MPLCR_SNAPSHOT_STR_LEN);
+        pstrcpy(mplcr_snapshot_array[mplcr_snapshot_array_size].device, 
+            MPLCR_SNAPSHOT_STR_LEN, device);    
+        printf("mplcr: device name is %s\n", mplcr_snapshot_array[mplcr_snapshot_array_size].device); 
+    } else {
+        mplcr_snapshot_array[mplcr_snapshot_array_size].device = NULL;
+        printf("warning device name is NULL\n"); 
+    }
+    
+    if(filename != NULL){
+        mplcr_snapshot_array[mplcr_snapshot_array_size].filename 
+            = g_malloc0(MPLCR_SNAPSHOT_STR_LEN);
+        pstrcpy(mplcr_snapshot_array[mplcr_snapshot_array_size].filename, 
+            MPLCR_SNAPSHOT_STR_LEN, filename);    
+        printf("mplcr: filename is %s\n", mplcr_snapshot_array[mplcr_snapshot_array_size].filename); 
+    } else {
+        mplcr_snapshot_array[mplcr_snapshot_array_size].filename = NULL;
+        printf("warning filename name is NULL\n"); 
+    }
+
+    if(filename != NULL){
+        mplcr_snapshot_array[mplcr_snapshot_array_size].format 
+            = g_malloc0(MPLCR_SNAPSHOT_STR_LEN);
+        pstrcpy(mplcr_snapshot_array[mplcr_snapshot_array_size].format, 
+            MPLCR_SNAPSHOT_STR_LEN, format);    
+        printf("mplcr: format is %s\n", mplcr_snapshot_array[mplcr_snapshot_array_size].format); 
+    } else {
+        mplcr_snapshot_array[mplcr_snapshot_array_size].format = NULL;
+        printf("warning format is NULL\n"); 
+    }
+
+    mplcr_snapshot_array[mplcr_snapshot_array_size].reuse = reuse; 
+
+    mode = reuse ? NEW_IMAGE_MODE_EXISTING : NEW_IMAGE_MODE_ABSOLUTE_PATHS;
+    mplcr_snapshot_array[mplcr_snapshot_array_size].mode = mode; 
+
+    mplcr_snapshot_array_size++; 
+
+    hmp_handle_error(mon, &err);
+}
+
+void mplcr_snapshot_blkdev_processing(void); 
+
+void mplcr_snapshot_blkdev_processing(void)
+{
+    int i; 
+    Error *err = NULL;
+
+    for(i = 0; i < mplcr_snapshot_array_size; i++){
+
+        const char *device = mplcr_snapshot_array[i].device;
+        const char *filename = mplcr_snapshot_array[i].filename;
+        const char *format = mplcr_snapshot_array[i].format;
+        enum NewImageMode mode = mplcr_snapshot_array[i].mode;
+
+        if (device) printf("mplcr: device name is %s\n", device); 
+        if (filename) printf("mplcr: filename is %s\n", filename); 
+        if (format) printf("mplcr: format is %s\n", format); 
+
+        qmp_blockdev_snapshot_sync(true, device, false, NULL,
+                               filename, false, NULL,
+                               !!format, format,
+                               true, mode, &err);
+
+        g_free(mplcr_snapshot_array[i].device);
+        mplcr_snapshot_array[i].device = NULL;
+        g_free(mplcr_snapshot_array[i].filename);
+        mplcr_snapshot_array[i].filename = NULL;
+        g_free(mplcr_snapshot_array[i].format);
+        mplcr_snapshot_array[i].format = NULL;
+
+    }
+
+    mplcr_snapshot_array_size = 0; // reset the table size
+    mplcr_snapshot_flag = 0; 
+
+    hmp_handle_error(NULL, &err);
 }
 
 void hmp_snapshot_blkdev_internal(Monitor *mon, const QDict *qdict)

@@ -370,7 +370,6 @@ uint64_t cpu_physical_memory_sync_dirty_bitmap(unsigned long *dest,
         unsigned long idx = (page * BITS_PER_LONG) / DIRTY_MEMORY_BLOCK_SIZE;
         unsigned long offset = BIT_WORD((page * BITS_PER_LONG) %
                                         DIRTY_MEMORY_BLOCK_SIZE);
-
         rcu_read_lock();
 
         src = atomic_rcu_read(
@@ -407,6 +406,197 @@ uint64_t cpu_physical_memory_sync_dirty_bitmap(unsigned long *dest,
                 }
             }
         }
+    }
+
+    return num_dirty;
+}
+
+
+static inline
+uint64_t mplm_first_cpu_physical_memory_sync_dirty_bitmap(unsigned long *dest,
+					   unsigned long *nondirtydest,
+                                           ram_addr_t start,
+                                           ram_addr_t length,
+                                           int64_t *real_dirty_pages,
+                                           uint64_t *mplm_nondirty_pages,
+                                           uint64_t *cur_num_nondirty_pages 
+					)
+{
+    ram_addr_t addr;
+    unsigned long page = BIT_WORD(start >> TARGET_PAGE_BITS);
+    uint64_t num_dirty = 0;
+    // MPLM
+    uint64_t num_new_dirty = 0;
+
+    unsigned long current_dirty;
+    unsigned long current_nondirty;
+
+    /* start address is aligned at the start of a word? */
+    if (((page * BITS_PER_LONG) << TARGET_PAGE_BITS) == start) {
+        int k;
+        int nr = BITS_TO_LONGS(length >> TARGET_PAGE_BITS);
+        unsigned long * const *src;
+        unsigned long idx = (page * BITS_PER_LONG) / DIRTY_MEMORY_BLOCK_SIZE;
+        unsigned long offset = BIT_WORD((page * BITS_PER_LONG) %
+                                        DIRTY_MEMORY_BLOCK_SIZE);
+// MPLM
+        rcu_read_lock();
+
+        src = atomic_rcu_read(
+                &ram_list.dirty_memory[DIRTY_MEMORY_MIGRATION])->blocks;
+
+        for (k = page; k < page + nr; k++) {
+            if (src[idx][offset]) {
+                unsigned long bits = atomic_xchg(&src[idx][offset], 0);
+                unsigned long new_dirty;
+                *real_dirty_pages += ctpopl(bits);
+                new_dirty = ~dest[k];
+                dest[k] |= bits;
+
+                nondirtydest[k] |= bits; // MPLM
+
+                new_dirty &= bits;
+                num_new_dirty = ctpopl(new_dirty);
+                num_dirty += num_new_dirty;
+                *mplm_nondirty_pages += num_new_dirty;
+               
+            }
+
+            current_dirty = dest[k]; 
+            current_nondirty = nondirtydest[k];
+            (*cur_num_nondirty_pages) += ctpopl(current_dirty & current_nondirty);
+
+            if (++offset >= BITS_TO_LONGS(DIRTY_MEMORY_BLOCK_SIZE)) {
+                offset = 0;
+                idx++;
+            }
+        }
+
+        rcu_read_unlock();
+    } else {
+// MPLM
+        for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
+            long k = (start + addr) >> TARGET_PAGE_BITS;
+            if (cpu_physical_memory_test_and_clear_dirty(
+                        start + addr,
+                        TARGET_PAGE_SIZE,
+                        DIRTY_MEMORY_MIGRATION)) {
+                *real_dirty_pages += 1;
+
+                if (!test_and_set_bit(k, dest)) {
+                    num_dirty++;
+                }
+                // MPLM 
+                if (!test_and_set_bit(k, nondirtydest)) {
+                    *mplm_nondirty_pages += 1;
+                }
+            }
+
+            if (test_bit(k, dest) && test_bit(k, nondirtydest)) {
+                (*cur_num_nondirty_pages)++;
+            }
+        }
+    }
+
+    return num_dirty;
+}
+
+
+static inline
+uint64_t mplm_next_cpu_physical_memory_sync_dirty_bitmap(unsigned long *dest,
+					   unsigned long *nondirtydest,
+                                           ram_addr_t start,
+                                           ram_addr_t length,
+                                           int64_t *real_dirty_pages,
+                                           uint64_t *mplm_nondirty_pages,
+                                           uint64_t *cur_num_nondirty_pages 
+					)
+{
+    ram_addr_t addr;
+    unsigned long page = BIT_WORD(start >> TARGET_PAGE_BITS);
+    uint64_t num_dirty = 0;
+    uint64_t sync_real_dirty_pages = 0; // number of real dirty page in this sync.
+    uint64_t sync_nondirty_pages = 0;
+
+    // MPLM
+    unsigned long current_dirty;
+    unsigned long current_nondirty;
+
+    /* start address is aligned at the start of a word? */
+    if (((page * BITS_PER_LONG) << TARGET_PAGE_BITS) == start) {
+        int k;
+        int nr = BITS_TO_LONGS(length >> TARGET_PAGE_BITS);
+        unsigned long * const *src;
+        unsigned long idx = (page * BITS_PER_LONG) / DIRTY_MEMORY_BLOCK_SIZE;
+        unsigned long offset = BIT_WORD((page * BITS_PER_LONG) %
+                                        DIRTY_MEMORY_BLOCK_SIZE);
+
+// MPLM
+        rcu_read_lock();
+
+        src = atomic_rcu_read(
+                &ram_list.dirty_memory[DIRTY_MEMORY_MIGRATION])->blocks;
+
+        for (k = page; k < page + nr; k++) {
+            if (src[idx][offset]) {
+                unsigned long bits = atomic_xchg(&src[idx][offset], 0);
+                unsigned long new_dirty;
+                unsigned long new_nondirty;
+
+                sync_real_dirty_pages += ctpopl(bits);
+                new_dirty = ~dest[k];
+                dest[k] |= bits;
+
+                new_dirty &= bits;
+                num_dirty += ctpopl(new_dirty);
+
+                new_nondirty = nondirtydest[k]; 
+                new_nondirty &= bits; // MPLM
+                nondirtydest[k] &= (~bits);  // MPLM
+
+                sync_nondirty_pages += ctpopl(new_nondirty);
+
+            }
+
+            current_dirty = dest[k]; 
+            current_nondirty = nondirtydest[k];
+            (*cur_num_nondirty_pages) += ctpopl(current_dirty & current_nondirty);
+
+            if (++offset >= BITS_TO_LONGS(DIRTY_MEMORY_BLOCK_SIZE)) {
+                offset = 0;
+                idx++;
+            }
+        }
+
+        rcu_read_unlock();
+
+        *real_dirty_pages += sync_real_dirty_pages; 
+        *mplm_nondirty_pages -= sync_nondirty_pages;
+    } else {
+// MPLM
+        for (addr = 0; addr < length; addr += TARGET_PAGE_SIZE) {
+            long k = (start + addr) >> TARGET_PAGE_BITS;
+            if (cpu_physical_memory_test_and_clear_dirty(
+                        start + addr,
+                        TARGET_PAGE_SIZE,
+                        DIRTY_MEMORY_MIGRATION)) {
+
+                sync_real_dirty_pages += 1;
+                if (!test_and_set_bit(k, dest)) {
+                    num_dirty++;
+                }
+                if (test_and_clear_bit(k, nondirtydest)) {
+                    sync_nondirty_pages += 1;
+                }
+            }
+
+            if (test_bit(k, dest) && test_bit(k, nondirtydest)) {
+                (*cur_num_nondirty_pages)++;
+            }
+        }
+
+        *real_dirty_pages += sync_real_dirty_pages; 
+        *mplm_nondirty_pages -= sync_nondirty_pages;
     }
 
     return num_dirty;

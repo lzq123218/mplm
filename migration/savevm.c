@@ -1010,10 +1010,20 @@ void qemu_savevm_state_begin(QEMUFile *f,
  *   0 : We haven't finished, caller have to go again
  *   1 : We have finished, we can go to complete phase
  */
+
+// MPLM 
+
+//int num_qsiterate = 0; 
+
 int qemu_savevm_state_iterate(QEMUFile *f, bool postcopy)
 {
     SaveStateEntry *se;
     int ret = 1;
+
+// MPLM
+//    printf("in q_s_iterate: %d\n", num_qsiterate); 
+//    fflush(stdout); 
+//    num_qsiterate++; 
 
     trace_savevm_state_iterate();
     QTAILQ_FOREACH(se, &savevm_state.handlers, entry) {
@@ -1197,6 +1207,9 @@ void qemu_savevm_state_complete_precopy(QEMUFile *f, bool iterable_only)
  * the result is split into the amount for units that can and
  * for units that can't do postcopy.
  */
+// MPLM
+//int num_qspending = 0; 
+
 void qemu_savevm_state_pending(QEMUFile *f, uint64_t max_size,
                                uint64_t *res_non_postcopiable,
                                uint64_t *res_postcopiable)
@@ -1206,6 +1219,10 @@ void qemu_savevm_state_pending(QEMUFile *f, uint64_t max_size,
     *res_non_postcopiable = 0;
     *res_postcopiable = 0;
 
+// MPLM
+//    printf("in q_s_pending: %d\n", num_qspending); 
+//    fflush(stdout); 
+//    num_qspending++; 
 
     QTAILQ_FOREACH(se, &savevm_state.handlers, entry) {
         if (!se->ops || !se->ops->save_live_pending) {
@@ -1248,7 +1265,6 @@ static int qemu_savevm_state(QEMUFile *f, Error **errp)
         ret = -EINVAL;
         goto done;
     }
-
     qemu_mutex_unlock_iothread();
     qemu_savevm_state_header(f);
     qemu_savevm_state_begin(f, &params);
@@ -2171,10 +2187,20 @@ int save_vmstate(Monitor *mon, const char *name)
     }
     return ret;
 }
+ 
+extern int mplm_savevm_in_use;
 
 void hmp_savevm(Monitor *mon, const QDict *qdict)
 {
+    // MPLM: Since mplm_flag is set by default, we have to reset it. 
+    // We don't do MPLM on savevm. 
+    mplm_savevm_in_use = 1; 
+
     save_vmstate(mon, qdict_get_try_str(qdict, "name"));
+
+    // MPLM: reset it because we want MPLM to be a default mode.
+    // The mplm flag should be restored at the beginning of the next migration.
+    mplm_savevm_in_use = 0; 
 }
 
 void qmp_xen_save_devices_state(const char *filename, Error **errp)

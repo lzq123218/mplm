@@ -723,3 +723,9 @@ ACPIOSTInfoList *qmp_query_acpi_ospm_status(Error **errp)
 
     return head;
 }
+
+void qmp_hello_world(Error **errp)
+{
+    printf("Hello, world!\n");
+}
+

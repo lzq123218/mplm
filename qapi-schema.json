@@ -6296,3 +6296,164 @@
 # Since 2.9
 ##
 { 'command': 'query-vm-generation-id', 'returns': 'GuidInfo' }
+
+##
+# @hello-world:
+#
+# We uses this command to check qmp.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "hello-world" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'hello-world' }
+
+##
+# @set-mplm-migration:
+#
+# Enable or disable mplm migration.
+#
+# @enable: true to enable, false to disable.
+#
+# @firstnondirty: true to enable first epoch send only non dirty pages, false to disable it.
+#
+# @intervaltime: MPLM interval duration.
+#
+# @relaxlivemig: true to relax dirty page tx, false otherwise.
+#
+# @dirtypercents: number of dirty pages in a hundread transmission.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "set-mplm-migration",
+#      "arguments": {"enable": true, "firstnondirty": true, "intervaltime": 3, "relaxlivemig": true, "dirtypercents": 50} }
+# <- { "return": {} }
+#
+# Since: 2.9
+##
+{ 'command': 'set-mplm-migration',
+  'data': { 'enable': 'bool', 'firstnondirty': 'bool', 'intervaltime': 'int', 'relaxlivemig': 'bool', 'dirtypercents': 'int' } }
+
+##
+# @set-mplm-extend-live:
+#
+# This command tells mplm to extend live migration until the set-mplm-end-live is called.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "set-mplm-extend-live" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'set-mplm-extend-live' }
+
+##
+# @set-mplm-end-live:
+#
+# This command tells mplm to stop live migration and enter downtime period.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "set-mplm-end-live" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'set-mplm-end-live' }
+
+##
+# @live-checkpointing-enable:
+#
+# This command enables live checkpointing operation.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "live-checkpointing-enable" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'live-checkpointing-enable' }
+
+##
+# @live-checkpointing-disable:
+#
+# This command disables live checkpointing.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "live-checkpointing-disable" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'live-checkpointing-disable' }
+
+##
+# @enable-max-migration-rate-limit:
+#
+# This command enable maximum transfer rate limit to INT64_MAX.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "enable-max-migration-rate-limit" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'enable-max-migration-rate-limit' }
+
+##
+# @disable-max-migration-rate-limit:
+#
+# This command enable maximum transfer rate limit to INT64_MAX.
+#
+# Returns: nothing.
+#
+# Example:
+#
+# -> { "execute": "disable-max-migration-rate-limit" }
+# <- { "return": {} }
+#
+# Since 2.9
+##
+{ 'command': 'disable-max-migration-rate-limit' }
+
+##
+# @mplcr-post-checkpointing-script:
+#
+# Run a shell script after mplcr live checkpointing finish and before VM 
+# resume computation.
+#
+# @uri: absolute path of the shell script.
+#
+# Returns: nothing on success
+#
+# Since: 2.9
+#
+# Example:
+#
+# -> { "execute": "mplcr-post-checkpointing-script",
+#      "arguments": { "uri": "/home/kasidit/images/createBtrfsFileSnashot.sh" } }
+# <- { "return": {} }
+#
+##
+{ 'command': 'mplcr-post-checkpointing-script', 'data': {'uri': 'str' } }

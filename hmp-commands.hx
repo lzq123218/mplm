@@ -1141,6 +1141,27 @@ Snapshot device, using snapshot file as target if provided
 ETEXI
 
     {
+        .name       = "snapshot_blkdev_mplcr",
+        .args_type  = "reuse:-n,device:B,snapshot-file:s?,format:s?",
+        .params     = "[-n] device [new-image-file] [format]",
+        .help       = "initiates a live snapshot\n\t\t\t"
+                      "of device. If a new image file is specified, the\n\t\t\t"
+                      "new image file will become the new root image.\n\t\t\t"
+                      "If format is specified, the snapshot file will\n\t\t\t"
+                      "be created in that format.\n\t\t\t"
+                      "The default format is qcow2.  The -n flag requests QEMU\n\t\t\t"
+                      "to reuse the image found in new-image-file, instead of\n\t\t\t"
+                      "recreating it from scratch.",
+        .cmd        = hmp_snapshot_blkdev_mplcr,
+    },
+
+STEXI
+@item snapshot_blkdev_mplcr
+@findex snapshot_blkdev_mplcr
+Snapshot device for mplcr, using snapshot file as target if provided
+ETEXI
+
+    {
         .name       = "snapshot_blkdev_internal",
         .args_type  = "device:B,name:s",
         .params     = "device name",
@@ -1763,6 +1784,45 @@ ETEXI
 STEXI
 @item qom-set @var{path} @var{property} @var{value}
 Set QOM property @var{property} of object at location @var{path} to value @var{value}
+ETEXI
+
+    {
+        .name       = "set-mplm-migration",
+        .args_type  = "enable:-n,firstnondirty:-f,relaxlivemig:-r,intervaltime:i,dirtypercents:i",
+        .params     = "[-n] [-f] [-r] intervaltime dirtypercents",
+        .help       = "set mplm migration parameter",
+        .cmd        = hmp_set_mplm_migration,
+    },
+STEXI
+@item set-mplm-migration
+@findex set-mplm-migration
+Set MPLM migration.
+ETEXI
+
+    {
+        .name       = "set-mplm-extend-live",
+        .args_type  = "",
+        .params     = "",
+        .help       = "set mplm live migration extension",
+        .cmd        = hmp_set_mplm_extend_live,
+    },
+STEXI
+@item set-mplm-extend-live
+@findex set-mplm-extend-live
+Set MPLM live migration extension.
+ETEXI
+
+    {
+        .name       = "set-mplm-end-live",
+        .args_type  = "",
+        .params     = "",
+        .help       = "set mplm end live migration extension",
+        .cmd        = hmp_set_mplm_end_live,
+    },
+STEXI
+@item set-mplm-end-live
+@findex set-mplm-end-live
+Set MPLM end live migration extension.
 ETEXI
 
     {

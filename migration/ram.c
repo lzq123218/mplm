@@ -49,6 +49,45 @@ static int dirty_rate_high_cnt;
 
 static uint64_t bitmap_sync_count;
 
+#define         MPLM_KEEP_PRE_COPY      0
+#define         MPLM_NO_QUEUE           1
+#define         MPLM_TWO_QUEUES         2
+// MPLM OPTIONS
+#define         MPLM_OPTIONS_NONE                       0
+#define         MPLM_OPTIONS_FIRST_ROUND_NONDIRTY       1
+
+// MPLM: These variables are defined in migration.c.
+extern uint8_t 		mplm_flag;
+extern int 		mplm_type;
+extern int 		mplm_options;
+extern int 		mplm_interval;	// in sec.
+
+extern int		mplm_send_counter; 
+extern int		mplm_send_cycle_size; 
+extern int		mplm_dirty_pages_sent; 
+extern int		mplm_dirty_pages_allot; 
+extern int		mplm_nondirty_pages_sent; 
+extern int		mplm_nondirty_pages_allot; 
+
+extern int64_t         checked_mplm_nondirty_sent;
+extern int64_t         checked_mplm_dirty_sent;
+
+extern int64_t         real_mplm_nondirty_sent;
+extern int64_t         real_mplm_dirty_sent;
+extern int64_t         real_mplm_S3_dirty_sent;
+
+int64_t  check_mplm_nondirty_sents = 0;
+int64_t  check_mplm_dirty_sents = 0;
+
+int 				mplm_bitmap_sync_flag = 0;
+int 				mplm_live_migration_stage_finish = 0;
+// MPLM
+uint64_t mplm_total_ram_pages; 
+struct timeval 		mplm_wakeup_time;
+// MPLM stat
+int 				num_enter_ram_save_iterate = 0;
+int64_t  			last_t0 = 0;
+
 /***********************************************************/
 /* ram save/restore */
 
@@ -214,9 +253,11 @@ uint64_t xbzrle_mig_pages_overflow(void)
 /* This is the last block that we have visited serching for dirty pages
  */
 static RAMBlock *last_seen_block;
+static RAMBlock *last_seen_nondirty_block; // MPLM
 /* This is the last block from where we have sent data */
 static RAMBlock *last_sent_block;
 static ram_addr_t last_offset;
+static ram_addr_t last_nondirty_offset; // MPLM
 static QemuMutex migration_bitmap_mutex;
 static uint64_t migration_dirty_pages;
 static uint32_t last_version;
@@ -243,6 +284,8 @@ static struct BitmapRcu {
      * of the postcopy phase
      */
     unsigned long *unsentmap;
+// MPLM 
+    unsigned long *nondirtybmap;
 } *migration_bitmap_rcu;
 
 struct CompressParam {
@@ -530,6 +573,17 @@ static int save_xbzrle_page(QEMUFile *f, uint8_t **current_data,
     return 1;
 }
 
+// MPLM
+uint64_t mplm_num_real_dirty_pages; 
+uint64_t mplm_num_new_dirty_pages; 
+uint64_t mplm_num_bmap_dirty_pages; 
+uint64_t mplm_num_dirty_pages; 
+uint64_t mplm_num_nondirty_pages; 
+uint64_t mplm_num_all_pages; 
+
+uint64_t current_num_nondirty_pages; 
+uint64_t current_num_dirty_pages; 
+
 /* Called with rcu_read_lock() to protect migration_bitmap
  * rb: The RAMBlock  to search for dirty pages in
  * start: Start address (typically so we can continue from previous page)
@@ -538,6 +592,13 @@ static int save_xbzrle_page(QEMUFile *f, uint8_t **current_data,
  *
  * Returns: byte offset within memory region of the start of a dirty page
  */
+
+#define MPLM_FIND_NONDIRTY	1
+#define MPLM_FIND_DIRTY		2
+
+int debug_counter = 0; 
+#define DEBUG_MAX_TIMES 	1500
+
 static inline
 ram_addr_t migration_bitmap_find_dirty(RAMBlock *rb,
                                        ram_addr_t start,
@@ -552,6 +613,7 @@ ram_addr_t migration_bitmap_find_dirty(RAMBlock *rb,
     unsigned long next;
 
     bitmap = atomic_rcu_read(&migration_bitmap_rcu)->bmap;
+
     if (ram_bulk_stage && nr > base) {
         next = nr + 1;
     } else {
@@ -562,6 +624,145 @@ ram_addr_t migration_bitmap_find_dirty(RAMBlock *rb,
     return (next - base) << TARGET_PAGE_BITS;
 }
 
+// MPLM
+extern int mplm_relax_dirty_tx; 
+
+static inline
+ram_addr_t mplm_migration_bitmap_find_dirty(RAMBlock *rb,
+                                       ram_addr_t start,
+                                       ram_addr_t *ram_addr_abs)
+{
+    unsigned long base = rb->offset >> TARGET_PAGE_BITS;
+    unsigned long nr = base + (start >> TARGET_PAGE_BITS);
+    uint64_t rb_size = rb->used_length;
+    unsigned long size = base + (rb_size >> TARGET_PAGE_BITS);
+    unsigned long *bitmap;
+    unsigned long *nondirtybitmap;
+    unsigned long next;
+    bool nondirty_flag = false;
+    bool dirty_flag = false;
+    bool dirtybit_found = false;
+    bool exceed_block_size = false;
+
+    bitmap = atomic_rcu_read(&migration_bitmap_rcu)->bmap;
+
+    if (ram_bulk_stage && nr > base) {
+
+      if(mplm_relax_dirty_tx){
+
+        next = nr + 1;
+
+      }
+      else{
+
+        nondirtybitmap = atomic_rcu_read(&migration_bitmap_rcu)->nondirtybmap;
+        do{
+          next = nr + 1;
+
+          if(next < size){
+            nondirty_flag = test_bit(next, nondirtybitmap);
+            dirty_flag = test_bit(next, bitmap);
+            if ((dirty_flag == true)&&(nondirty_flag == false)){
+        	  dirtybit_found = true;
+            }
+            else{
+        	  //nr = next + 1;
+        	  nr = next;
+            }
+          }
+          else{
+    	    exceed_block_size = true;
+          }
+        }while(!exceed_block_size && !dirtybit_found);
+      }
+
+    } else {
+        //next = nr + 1;
+        next = find_next_bit(bitmap, size, nr);
+    }
+
+    *ram_addr_abs = next << TARGET_PAGE_BITS;
+    return (next - base) << TARGET_PAGE_BITS;
+}
+
+/*
+static inline
+ram_addr_t mplm_migration_bitmap_find_dirty(RAMBlock *rb,
+                                       ram_addr_t start,
+                                       ram_addr_t *ram_addr_abs)
+{
+    unsigned long base = rb->offset >> TARGET_PAGE_BITS;
+    unsigned long nr = base + (start >> TARGET_PAGE_BITS);
+    uint64_t rb_size = rb->used_length;
+    unsigned long size = base + (rb_size >> TARGET_PAGE_BITS);
+    unsigned long *bitmap;
+
+    unsigned long next;
+
+    bitmap = atomic_rcu_read(&migration_bitmap_rcu)->bmap;
+
+    if (ram_bulk_stage && nr > base) {
+        next = nr + 1;
+    } else {
+        next = find_next_bit(bitmap, size, nr);
+    }
+
+    *ram_addr_abs = next << TARGET_PAGE_BITS;
+    return (next - base) << TARGET_PAGE_BITS;
+}
+*/
+
+static inline
+ram_addr_t mplm_migration_bitmap_find_nondirty(RAMBlock *rb,
+                                       ram_addr_t start,
+                                       ram_addr_t *ram_addr_abs)
+{
+    unsigned long base = rb->offset >> TARGET_PAGE_BITS;
+    unsigned long nr = base + (start >> TARGET_PAGE_BITS);
+    uint64_t rb_size = rb->used_length;
+    unsigned long size = base + (rb_size >> TARGET_PAGE_BITS);
+// MPLM
+    unsigned long *nondirtybitmap;
+
+    unsigned long next;
+
+    nondirtybitmap = atomic_rcu_read(&migration_bitmap_rcu)->nondirtybmap;
+
+    if (ram_bulk_stage && nr > base) {
+
+      next = nr + 1;
+
+    } else {
+      next = find_next_bit(nondirtybitmap, size, nr);
+
+//if(debug_counter < DEBUG_MAX_TIMES){
+//  printf(">>> NONDIRTY (1,0) error find_dirty flag= %d, found=%d, base= %ld, start= %ld, nr=%ld, size=%ld, next=%ld\n", 
+//      find_dirty_flag, found, base, start, nr, size, next); 
+//  fflush(stdout);  
+//  debug_counter++; 
+//}
+    }
+
+    *ram_addr_abs = next << TARGET_PAGE_BITS;
+    return (next - base) << TARGET_PAGE_BITS;
+}
+
+// MPLM 
+static inline bool migration_bitmap_clear_nondirty(ram_addr_t addr)
+{
+    bool ret;
+    int nr = addr >> TARGET_PAGE_BITS;
+    unsigned long *nondirtybitmap = atomic_rcu_read(&migration_bitmap_rcu)->nondirtybmap;
+
+    ret = test_and_clear_bit(nr, nondirtybitmap);
+
+    if (ret) {
+        mplm_num_nondirty_pages--;
+    }
+    return ret;
+}
+
+// MPLM
 static inline bool migration_bitmap_clear_dirty(ram_addr_t addr)
 {
     bool ret;
@@ -577,6 +778,10 @@ static inline bool migration_bitmap_clear_dirty(ram_addr_t addr)
 }
 
 static int64_t num_dirty_pages_period;
+
+
+// This is the original pre-copy. 
+//
 static void migration_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
 {
     unsigned long *bitmap;
@@ -585,19 +790,84 @@ static void migration_bitmap_sync_range(ram_addr_t start, ram_addr_t length)
                              start, length, &num_dirty_pages_period);
 }
 
+static void mplm_migration_bitmap_sync_range(int first_sync, ram_addr_t start, ram_addr_t length)
+{
+    unsigned long *bitmap, *nondirtybitmap;
+
+    bitmap = atomic_rcu_read(&migration_bitmap_rcu)->bmap;
+    nondirtybitmap = atomic_rcu_read(&migration_bitmap_rcu)->nondirtybmap;
+
+    // 
+    // The migration_dirty_pages represents the pre-copy dirty pages. 
+    // We still use it for pre-copy's ending condition. 
+    // For MPLM, we use the current_num_nondirty_pages variable to decide 
+    // when live migration end. 
+    //
+    if(first_sync){
+        migration_dirty_pages += mplm_first_cpu_physical_memory_sync_dirty_bitmap(
+    								bitmap, 
+                                                                nondirtybitmap,
+								start, length, 
+								&num_dirty_pages_period,
+								&mplm_num_nondirty_pages,
+                                                                &current_num_nondirty_pages);
+    }
+    else{
+        migration_dirty_pages += mplm_next_cpu_physical_memory_sync_dirty_bitmap(
+    								bitmap, 
+                                                                nondirtybitmap,
+								start, length, 
+								&num_dirty_pages_period,
+								&mplm_num_nondirty_pages,
+                                                                &current_num_nondirty_pages);
+    }
+}
+
 /* Fix me: there are too many global variables used in migration process. */
 static int64_t start_time;
 static int64_t bytes_xfer_prev;
 static uint64_t xbzrle_cache_miss_prev;
 static uint64_t iterations_prev;
 
+// MPLM 
+#define S0_NonDirty    1
+#define S1_NonDirty    2
+#define S2_Dirty       3
+#define S3_Dirty       4
+#define S4_LiveMigEnd  5
+//#define S5_Dirty       6
+
+int rsb_state = S0_NonDirty; 
+
+int first_migration_bitmap_sync_flag = 0; 
+
 static void migration_bitmap_sync_init(void)
 {
     start_time = 0;
+// MPLM
+    first_migration_bitmap_sync_flag = 1; 
     bytes_xfer_prev = 0;
     num_dirty_pages_period = 0;
     xbzrle_cache_miss_prev = 0;
     iterations_prev = 0;
+// MPLM
+    if(mplm_flag){
+      mplm_num_real_dirty_pages = 0;
+      mplm_num_new_dirty_pages = 0;
+      mplm_num_bmap_dirty_pages = 0;
+      mplm_num_dirty_pages = 0;
+      current_num_nondirty_pages = 0;
+      mplm_num_all_pages = 0;
+
+      if(mplm_options == MPLM_OPTIONS_FIRST_ROUND_NONDIRTY){
+        rsb_state = S0_NonDirty; 
+      }
+      else{
+        rsb_state = S1_NonDirty; 
+      }
+
+      mplm_live_migration_stage_finish = 0; 
+    }
 }
 
 /* Returns a summary bitmap of the page sizes of all RAMBlocks;
@@ -617,33 +887,227 @@ uint64_t ram_pagesize_summary(void)
     return summary;
 }
 
-static void migration_bitmap_sync(void)
+int64_t xfer_normal_pages_now;
+int64_t xfer_normal_pages_last;
+int64_t xfer_normal_pages_num;
+int64_t bytes_xfer_count;
+int64_t start_xfer_epoch_time;
+int64_t end_xfer_epoch_time;
+int64_t bitmap_sync_interval;
+double  bytes_xfer_rate; 
+double  mbits_xfer_rate; 
+
+int64_t rsb_xfer_normal_pages_now;
+int64_t rsb_xfer_normal_pages_last;
+int64_t rsb_xfer_normal_pages_num;
+
+int64_t rsb_xfer_normal_dirty_pages;
+int64_t rsb_xfer_normal_nondirty_pages;
+
+extern double mplm_minimal_tx_ratio; 
+
+static void migration_bitmap_sync(int first_sync)
 {
     RAMBlock *block;
     MigrationState *s = migrate_get_current();
     int64_t end_time;
     int64_t bytes_xfer_now;
+// MPLM
+    int64_t start_local_bitmap_sync_time;
+    int64_t end_local_bitmap_sync_time;
+    int64_t bitmap_sync_latency;
 
-    bitmap_sync_count++;
-
-    if (!bytes_xfer_prev) {
+    if (!start_time) {
         bytes_xfer_prev = ram_bytes_transferred();
+
+        xfer_normal_pages_last = acct_info.norm_pages;
+        xfer_normal_pages_num = 0;
+// MPLM
+printf("\n\n\n---mig_bitmap_sync(): first time count=  %" PRId64 " rsb state= %d \n", bitmap_sync_count, rsb_state);
+fflush(stdout);
+    }
+    else{
+        xfer_normal_pages_now = acct_info.norm_pages;
+        xfer_normal_pages_num = xfer_normal_pages_now -
+                                 xfer_normal_pages_last;
+        xfer_normal_pages_last = xfer_normal_pages_now;
+
+        bytes_xfer_now = ram_bytes_transferred();
+        bytes_xfer_count = bytes_xfer_now - bytes_xfer_prev;
+        bytes_xfer_prev = bytes_xfer_now;
     }
 
     if (!start_time) {
         start_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
     }
 
+    if(!first_migration_bitmap_sync_flag){
+
+        end_xfer_epoch_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME); 
+
+        bitmap_sync_interval = end_xfer_epoch_time - start_xfer_epoch_time; 
+
+        if(bitmap_sync_interval){
+          bytes_xfer_rate = 
+            (double)((double)(bytes_xfer_count*1000)/(double)(bitmap_sync_interval)); 
+          mbits_xfer_rate = 
+            (double)((double)(bytes_xfer_count*8)/(double)(bitmap_sync_interval*1000)); 
+        }
+        else{
+          printf("********** fatal error: user should quit the vm now!\n"); 
+          fflush(stdout); 
+        }
+
+        printf("---migration_bitmap_sync(): Last epoch bytes xfer=%" PRId64 " bytes Number xfer NORMAL pages=%" PRId64 " pages, \n------MPLM interval = %" PRId64 " ms\n------Bytes xfer rate=%lf bytes/sec (%lf mbit/sec)\n", 
+          bytes_xfer_count, 
+          xfer_normal_pages_num,
+          bitmap_sync_interval,
+          bytes_xfer_rate,
+          mbits_xfer_rate
+        ); 
+        fflush(stdout);
+    }
+
+    start_local_bitmap_sync_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+
+// MPLM
+    if(mplm_flag){
+      mplm_num_real_dirty_pages = 0;
+      mplm_num_new_dirty_pages = 0;
+      mplm_num_bmap_dirty_pages = 0;
+      mplm_num_dirty_pages = 0;
+      current_num_nondirty_pages = 0;
+
+      if(!first_sync){ // do S0_NonDirty first during DU interval only
+        if (rsb_state == S0_NonDirty){ 
+
+           rsb_state = S1_NonDirty;  
+           mplm_send_counter = 0; 
+// MPLM
+           ram_bulk_stage = false;
+
+           rsb_xfer_normal_pages_last = acct_info.norm_pages;
+           rsb_xfer_normal_pages_num = 0;
+
+           rsb_xfer_normal_dirty_pages = 0;
+           rsb_xfer_normal_nondirty_pages = 0;
+// MPLM
+printf("---mig_bitmap_sync(): This is the 2nd sync that mark the end of the first epoch\n------We have to change S0_NonDirty(%d)to S1_NonDirty(%d) \n------and set ram_bulk_stage to false HERE.\n------Initialize RSB Xfer Normal page last=%" PRId64 " pages\n", 
+         S0_NonDirty, S1_NonDirty, rsb_xfer_normal_pages_last); 
+fflush(stdout); 
+
+        }
+        else{
+printf("---mig_bitmap_sync(): ACCU rsb normal dirty=%" PRId64 " pages ACCU nondirty=%" PRId64 " pages\n", 
+         rsb_xfer_normal_dirty_pages, rsb_xfer_normal_nondirty_pages); 
+        }
+
+        rsb_xfer_normal_dirty_pages = 0;
+        rsb_xfer_normal_nondirty_pages = 0;
+      }
+
+      mplm_num_all_pages = 0;
+    }
+// MPLM
+    printf("---mig_bitmap_sync(): count=%" PRId64 " rsb state= %d \n", bitmap_sync_count, rsb_state);
+    fflush(stdout);
+
+    bitmap_sync_count++;
+
     trace_migration_bitmap_sync_start();
     memory_global_dirty_log_sync();
 
-    qemu_mutex_lock(&migration_bitmap_mutex);
-    rcu_read_lock();
-    QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
+    if(mplm_flag){
+      qemu_mutex_lock(&migration_bitmap_mutex);
+      rcu_read_lock();
+      QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
+        mplm_migration_bitmap_sync_range(first_sync, block->offset, block->used_length); // MPLM
+      }
+      rcu_read_unlock();
+      qemu_mutex_unlock(&migration_bitmap_mutex);
+    } else {
+      qemu_mutex_lock(&migration_bitmap_mutex);
+      rcu_read_lock();
+      QLIST_FOREACH_RCU(block, &ram_list.blocks, next) {
         migration_bitmap_sync_range(block->offset, block->used_length);
+      }
+      rcu_read_unlock();
+      qemu_mutex_unlock(&migration_bitmap_mutex);
     }
-    rcu_read_unlock();
-    qemu_mutex_unlock(&migration_bitmap_mutex);
+
+    if(mplm_flag){
+
+      int64_t minimal_tx_pages; 
+      double  current_dirty_page_ratio; 
+
+// MPLM
+      printf("---mig_bitmap_sync(): \
+TotalPages %" PRId64 " \
+\n------DirtPagesPeriod %" PRId64 " \
+DirtPagesCnt %" PRId64 " \
+\n------TrackedNondirtPages %" PRId64 " \
+ExplicitlyCountedNondirtPages %" PRId64 "\n ", 
+      mplm_total_ram_pages,
+      num_dirty_pages_period,
+      migration_dirty_pages,
+      mplm_num_nondirty_pages,
+      current_num_nondirty_pages
+      ); 
+      fflush(stdout);
+
+      if((rsb_state == S1_NonDirty)||(rsb_state == S2_Dirty)){
+
+      // set new memory scanning threshold
+      //    we may later substitue current_num_nondirty_pages with mplm_num_nondirty_pages..
+
+      current_num_dirty_pages = mplm_total_ram_pages - current_num_nondirty_pages; 
+      minimal_tx_pages = (int64_t)((double)(mplm_minimal_tx_ratio *((double)mplm_send_cycle_size))); 
+      current_dirty_page_ratio = (((double)current_num_dirty_pages)/((double)mplm_total_ram_pages));
+
+      printf("---mig_bitmap_sync(): CurentDirtyPages %" PRId64 " \
+\n------MinimalTxpages %" PRId64 " (ratio %lf x cycle %d) \
+\n------DirtPagesRatio %lf \n", 
+      current_num_dirty_pages,
+      minimal_tx_pages,
+      mplm_minimal_tx_ratio, mplm_send_cycle_size,
+      current_dirty_page_ratio); 
+      fflush(stdout);
+
+      mplm_dirty_pages_allot = (int64_t)((double)(current_dirty_page_ratio *((double)mplm_send_cycle_size)));
+
+      printf("---mig_bitmap_sync(): Calculated mplm_dirty_pages_allot %d pages \n", 
+      mplm_dirty_pages_allot); 
+      fflush(stdout);
+
+      if(mplm_dirty_pages_allot < minimal_tx_pages){
+        mplm_dirty_pages_allot = minimal_tx_pages; 
+      }
+
+      printf("---mig_bitmap_sync(): Adjusted mplm_dirty_pages_allot %d pages \n", 
+      mplm_dirty_pages_allot); 
+      fflush(stdout);
+
+      mplm_nondirty_pages_allot = mplm_send_cycle_size - mplm_dirty_pages_allot; 
+
+      printf("---mig_bitmap_sync(): Calculated mplm_nondirty_pages_allot %d pages \n", 
+      mplm_nondirty_pages_allot); 
+      fflush(stdout);
+
+      if(mplm_nondirty_pages_allot < minimal_tx_pages){
+        mplm_nondirty_pages_allot = minimal_tx_pages; 
+      }
+
+      printf("---mig_bitmap_sync(): \
+Adjusted mplm_nondirty_pages_allot %d pages \n-----Reset mplm_send_counter to 0\n\n", 
+      mplm_nondirty_pages_allot); 
+      fflush(stdout);
+
+      mplm_send_counter = 0; 
+      rsb_state = S1_NonDirty;  
+
+      }
+
+    }
 
     trace_migration_bitmap_sync_end(num_dirty_pages_period);
 
@@ -690,7 +1154,33 @@ static void migration_bitmap_sync(void)
     if (migrate_use_events()) {
         qapi_event_send_migration_pass(bitmap_sync_count, NULL);
     }
-}
+
+    end_local_bitmap_sync_time = end_time;
+    bitmap_sync_latency = end_local_bitmap_sync_time - start_local_bitmap_sync_time;
+
+    if(first_migration_bitmap_sync_flag){
+       first_migration_bitmap_sync_flag = 0; 
+    }
+    start_xfer_epoch_time = end_time; 
+
+
+    printf("---migration_bitmap_sync(): Bitmap Sync Latency %" PRId64 " ms\n\n\n", 
+          bitmap_sync_latency
+    ); 
+    fflush(stdout);
+
+//    if(mplm_flag){
+// MPLM
+//      printf("<%d> migration_bitmap_sync(): Bitmap Sync Latency %" PRId64 " ms Bytes xfer %" PRId64 " bytes Number xfer pages %" PRId64 " pages Byte xfer rate %lf bytes/sec (%lf mbps)\n", 
+//      bitmap_sync_index,
+//      bitmap_sync_latency,
+//      bytes_xfer_count, 
+//      xfer_normal_pages_num,
+//      bytes_xfer_rate,
+//      (double)(bytes_xfer_rate/1000000)
+//      ); 
+    }
+//}
 
 /**
  * save_zero_page: Send the zero page to the stream
@@ -745,6 +1235,7 @@ static void ram_release_pages(MigrationState *ms, const char *block_name,
  * @last_stage: if we are at the completion stage
  * @bytes_transferred: increase it with the number of transferred bytes
  */
+
 static int ram_save_page(MigrationState *ms, QEMUFile *f, PageSearchStatus *pss,
                          bool last_stage, uint64_t *bytes_transferred)
 {
@@ -1036,6 +1527,9 @@ static bool find_dirty_block(QEMUFile *f, PageSearchStatus *pss,
             /* Flag that we've looped */
             pss->complete_round = true;
             ram_bulk_stage = false;
+// MPLM 
+printf("In find_dirty_block(): ram_bulk_stage = false, scan for dirty complete round\n"); 
+fflush(stdout); 
             if (migrate_use_xbzrle()) {
                 /* If xbzrle is on, stop using the data compression at this
                  * point. In theory, xbzrle can do better than compression.
@@ -1046,6 +1540,121 @@ static bool find_dirty_block(QEMUFile *f, PageSearchStatus *pss,
         }
         /* Didn't find anything this time, but try again on the new block */
         *again = true;
+        return false;
+    } else {
+        /* Can go around again, but... */
+        *again = true;
+        /* We've found something so probably don't need to */
+        return true;
+    }
+}
+
+static bool mplm_find_dirty_block(QEMUFile *f, PageSearchStatus *pss,
+                             bool *again, ram_addr_t *ram_addr_abs)
+{
+//printf("mplm_find_dirty_block: before mplm_migration_bitmap_find_dirty\n");
+//fflush(stdout); 
+    pss->offset = mplm_migration_bitmap_find_dirty(pss->block, pss->offset,
+                                              ram_addr_abs);
+//printf("mplm_find_dirty_block: after mplm_migration_bitmap_find_dirty\n\n");
+//fflush(stdout); 
+    if (pss->complete_round && pss->block == last_seen_block &&
+        pss->offset >= last_offset) {
+        /*
+         * We've been once around the RAM and haven't found anything.
+         * Give up.
+         */
+printf("mplm_find_dirty_block: We've been once around the RAM and haven't found anything. Give up dirty page serching for now!\n");
+fflush(stdout); 
+        *again = false;
+        return false;
+    }
+    if (pss->offset >= pss->block->used_length) {
+        /* Didn't find anything in this RAM Block */
+        pss->offset = 0;
+        pss->block = QLIST_NEXT_RCU(pss->block, next);
+        if (!pss->block) {
+            /* Hit the end of the list */
+            pss->block = QLIST_FIRST_RCU(&ram_list.blocks);
+            /* Flag that we've looped */
+            pss->complete_round = true;
+
+// MPLM: For now, I am going to let the dirty page finder do nr increment.
+
+            ram_bulk_stage = false;
+// MPLM 
+//printf("mplm_find_dirty_block():set ram_bulk_stage to false on dirty page finding.\n"); 
+printf("In mplm_find_dirty_block():ram_bulk_stage to false, scan dirty complete round.\n"); 
+fflush(stdout); 
+            if (migrate_use_xbzrle()) {
+                /* If xbzrle is on, stop using the data compression at this
+                 * point. In theory, xbzrle can do better than compression.
+                 */
+                flush_compressed_data(f);
+                compression_switch = false;
+            }
+        }
+        /* Didn't find anything this time, but try again on the new block */
+printf("In mplm_find_dirty_block:find again in a new block!\n");
+fflush(stdout); 
+        *again = true;
+        return false;
+    } else {
+        /* Can go around again, but... */
+        *again = true;
+        /* We've found something so probably don't need to */
+        return true;
+    }
+}
+
+static bool mplm_find_nondirty_block(QEMUFile *f, PageSearchStatus *pss,
+                             bool *again, ram_addr_t *ram_addr_abs)
+{
+    pss->offset = mplm_migration_bitmap_find_nondirty(pss->block, pss->offset,
+                                              ram_addr_abs);
+    if (pss->complete_round && pss->block == last_seen_nondirty_block &&
+        pss->offset >= last_nondirty_offset) {
+        /*
+         * We've been once around the RAM and haven't found anything.
+         * Give up.
+         */
+printf("mplm_find_nondirty_block: We've been once around the RAM and haven't found anything. Give up!\n");
+fflush(stdout); 
+        *again = false;
+        return false;
+    }
+    if (pss->offset >= pss->block->used_length) {
+        /* Didn't find anything in this RAM Block */
+        pss->offset = 0;
+        pss->block = QLIST_NEXT_RCU(pss->block, next);
+        if (!pss->block) {
+            /* Hit the end of the list */
+            pss->block = QLIST_FIRST_RCU(&ram_list.blocks);
+            /* Flag that we've looped */
+            pss->complete_round = true;
+            ram_bulk_stage = false;
+// MPLM 
+printf("In mplm_find_nondirty_block():set ram_bulk_stage = false, scan for dirty complete round\n"); 
+fflush(stdout); 
+
+            if (migrate_use_xbzrle()) {
+                /* If xbzrle is on, stop using the data compression at this
+                 * point. In theory, xbzrle can do better than compression.
+                 */
+                flush_compressed_data(f);
+                compression_switch = false;
+            }
+        }
+        else{
+// MPLM 
+printf("In mplm_find_nondirty_block():find again in a new block\n"); 
+fflush(stdout); 
+        }
+        /* Didn't find anything this time, but try again on the new block */
+        *again = true;
+
+// MPLM ... end of round of ram scanning means end of live
+        //*again = false;
         return false;
     } else {
         /* Can go around again, but... */
@@ -1143,6 +1752,9 @@ static bool get_queued_page(MigrationState *ms, PageSearchStatus *pss,
          * dirty, that's no longer true.
          */
         ram_bulk_stage = false;
+// MPLM 
+printf("get_queued_page():ram_bulk_stage = false\n"); 
+fflush(stdout); 
 
         /*
          * We want the background search to continue from the queued page
@@ -1243,6 +1855,129 @@ err:
 }
 
 /**
+ * ram_save_target_dirty_page: Save one target page
+ *
+ *
+ * @f: QEMUFile where to send the data
+ * @block: pointer to block that contains the page we want to send
+ * @offset: offset inside the block for the page;
+ * @last_stage: if we are at the completion stage
+ * @bytes_transferred: increase it with the number of transferred bytes
+ * @dirty_ram_abs: Address of the start of the dirty page in ram_addr_t space
+ *
+ * Returns: Number of pages written.
+ */
+//MPLM debug
+int rst_not_send_dirty = 0; 
+
+static int ram_save_target_dirty_page(MigrationState *ms, QEMUFile *f,
+                                PageSearchStatus *pss,
+                                bool last_stage,
+                                uint64_t *bytes_transferred,
+                                ram_addr_t dirty_ram_abs)
+{
+    int res = 0;
+
+    /* Check the pages is dirty and if it is send it */
+    if (migration_bitmap_clear_dirty(dirty_ram_abs)) {
+        unsigned long *unsentmap;
+        if (compression_switch && migrate_use_compression()) {
+            res = ram_save_compressed_page(ms, f, pss,
+                                           last_stage,
+                                           bytes_transferred);
+        } else {
+            res = ram_save_page(ms, f, pss, last_stage,
+                                bytes_transferred);
+        }
+
+        // MPLM: clear the nondirty if it was set 
+        // also reduce mplm_nondirty page counter by 1
+        migration_bitmap_clear_nondirty(dirty_ram_abs);  
+
+        if (res < 0) {
+            return res;
+        }
+        unsentmap = atomic_rcu_read(&migration_bitmap_rcu)->unsentmap;
+        if (unsentmap) {
+            clear_bit(dirty_ram_abs >> TARGET_PAGE_BITS, unsentmap);
+        }
+        /* Only update last_sent_block if a block was actually sent; xbzrle
+         * might have decided the page was identical so didn't bother writing
+         * to the stream.
+         */
+        if (res > 0) {
+            last_sent_block = pss->block;
+        }
+    }
+    else{
+        rst_not_send_dirty++; 
+    }
+
+    return res;
+}
+
+/**
+ * ram_save_target_nondirty_page: Save one target page
+ *
+ *
+ * @f: QEMUFile where to send the data
+ * @block: pointer to block that contains the page we want to send
+ * @offset: offset inside the block for the page;
+ * @last_stage: if we are at the completion stage
+ * @bytes_transferred: increase it with the number of transferred bytes
+ * @nondirty_ram_abs: Address of the start of the nondirty page in ram_addr_t space
+ *
+ * Returns: Number of pages written.
+ */
+
+int rst_not_send_nondirty = 0; 
+
+static int ram_save_target_nondirty_page(MigrationState *ms, QEMUFile *f,
+                                PageSearchStatus *npss,
+                                bool last_stage,
+                                uint64_t *bytes_transferred,
+                                ram_addr_t nondirty_ram_abs)
+{
+    int res = 0;
+
+    /* Check the pages is nondirty and if it is send it */
+    if (migration_bitmap_clear_nondirty(nondirty_ram_abs)) {
+        unsigned long *unsentmap;
+        if (compression_switch && migrate_use_compression()) {
+            res = ram_save_compressed_page(ms, f, npss,
+                                           last_stage,
+                                           bytes_transferred);
+        } else {
+            res = ram_save_page(ms, f, npss, last_stage,
+                                bytes_transferred);
+        }
+
+        // MPLM clear dirty bit too. 
+        migration_bitmap_clear_dirty(nondirty_ram_abs);  
+
+        if (res < 0) {
+            return res;
+        }
+        unsentmap = atomic_rcu_read(&migration_bitmap_rcu)->unsentmap;
+        if (unsentmap) {
+            clear_bit(nondirty_ram_abs >> TARGET_PAGE_BITS, unsentmap);
+        }
+        /* Only update last_sent_block if a block was actually sent; xbzrle
+         * might have decided the page was identical so didn't bother writing
+         * to the stream.
+         */
+        if (res > 0) {
+            last_sent_block = npss->block;
+        }
+    }
+    else{
+        rst_not_send_nondirty++; 
+    }
+
+    return res;
+}
+
+/**
  * ram_save_target_page: Save one target page
  *
  *
@@ -1255,6 +1990,7 @@ err:
  *
  * Returns: Number of pages written.
  */
+
 static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
                                 PageSearchStatus *pss,
                                 bool last_stage,
@@ -1295,6 +2031,96 @@ static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
 }
 
 /**
+ * ram_save_host_dirty_page: Starting at *offset send pages up to the end
+ *                     of the current host page.  It's valid for the initial
+ *                     offset to point into the middle of a host page
+ *                     in which case the remainder of the hostpage is sent.
+ *                     Only dirty target pages are sent.
+ *                     Note that the host page size may be a huge page for this
+ *                     block.
+ *
+ * Returns: Number of pages written.
+ *
+ * @f: QEMUFile where to send the data
+ * @block: pointer to block that contains the page we want to send
+ * @offset: offset inside the block for the page; updated to last target page
+ *          sent
+ * @last_stage: if we are at the completion stage
+ * @bytes_transferred: increase it with the number of transferred bytes
+ * @dirty_ram_abs: Address of the start of the dirty page in ram_addr_t space
+ */
+static int ram_save_host_dirty_page(MigrationState *ms, QEMUFile *f,
+                              PageSearchStatus *pss,
+                              bool last_stage,
+                              uint64_t *bytes_transferred,
+                              ram_addr_t dirty_ram_abs)
+{
+    int tmppages, pages = 0;
+    size_t pagesize = qemu_ram_pagesize(pss->block);
+
+    do {
+        tmppages = ram_save_target_dirty_page(ms, f, pss, last_stage,
+                                        bytes_transferred, dirty_ram_abs);
+        if (tmppages < 0) {
+            return tmppages;
+        }
+
+        pages += tmppages;
+        pss->offset += TARGET_PAGE_SIZE;
+        dirty_ram_abs += TARGET_PAGE_SIZE;
+    } while (pss->offset & (pagesize - 1));
+
+    /* The offset we leave with is the last one we looked at */
+    pss->offset -= TARGET_PAGE_SIZE;
+    return pages;
+}
+
+/**
+ * ram_save_host_nondirty_page: Starting at *offset send pages up to the end
+ *                     of the current host page.  It's valid for the initial
+ *                     offset to point into the middle of a host page
+ *                     in which case the remainder of the hostpage is sent.
+ *                     Only dirty target pages are sent.
+ *                     Note that the host page size may be a huge page for this
+ *                     block.
+ *
+ * Returns: Number of pages written.
+ *
+ * @f: QEMUFile where to send the data
+ * @block: pointer to block that contains the page we want to send
+ * @offset: offset inside the block for the page; updated to last target page
+ *          sent
+ * @last_stage: if we are at the completion stage
+ * @bytes_transferred: increase it with the number of transferred bytes
+ * @nondirty_ram_abs: Address of the start of the nondirty page in ram_addr_t space
+ */
+static int ram_save_host_nondirty_page(MigrationState *ms, QEMUFile *f,
+                              PageSearchStatus *npss,
+                              bool last_stage,
+                              uint64_t *bytes_transferred,
+                              ram_addr_t nondirty_ram_abs)
+{
+    int tmppages, pages = 0;
+    size_t pagesize = qemu_ram_pagesize(npss->block);
+
+    do {
+        tmppages = ram_save_target_nondirty_page(ms, f, npss, last_stage,
+                                        bytes_transferred, nondirty_ram_abs);
+        if (tmppages < 0) {
+            return tmppages;
+        }
+
+        pages += tmppages;
+        npss->offset += TARGET_PAGE_SIZE;
+        nondirty_ram_abs += TARGET_PAGE_SIZE;
+    } while (npss->offset & (pagesize - 1));
+
+    /* The offset we leave with is the last one we looked at */
+    npss->offset -= TARGET_PAGE_SIZE;
+    return pages;
+}
+
+/**
  * ram_save_host_page: Starting at *offset send pages up to the end
  *                     of the current host page.  It's valid for the initial
  *                     offset to point into the middle of a host page
@@ -1313,6 +2139,7 @@ static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
  * @bytes_transferred: increase it with the number of transferred bytes
  * @dirty_ram_abs: Address of the start of the dirty page in ram_addr_t space
  */
+
 static int ram_save_host_page(MigrationState *ms, QEMUFile *f,
                               PageSearchStatus *pss,
                               bool last_stage,
@@ -1358,27 +2185,309 @@ static int ram_save_host_page(MigrationState *ms, QEMUFile *f,
 static int ram_find_and_save_block(QEMUFile *f, bool last_stage,
                                    uint64_t *bytes_transferred)
 {
-    PageSearchStatus pss;
+    PageSearchStatus pss, npss;
     MigrationState *ms = migrate_get_current();
     int pages = 0;
     bool again, found;
     ram_addr_t dirty_ram_abs; /* Address of the start of the dirty page in
                                  ram_addr_t space */
+    ram_addr_t nondirty_ram_abs; /* Address of the start of the nondirty page in
+                                 ram_addr_t space */
 
     /* No dirty page as there is zero RAM */
     if (!ram_bytes_total()) {
+        if(mplm_flag){
+          mplm_live_migration_stage_finish = 1; 
+        }
         return pages;
     }
 
-    pss.block = last_seen_block;
-    pss.offset = last_offset;
-    pss.complete_round = false;
+    if(mplm_flag){
 
-    if (!pss.block) {
+    if((mplm_type == MPLM_TWO_QUEUES) &&
+       (last_stage == false) &&
+       (rsb_state != S4_LiveMigEnd) 
+      ){ // if during  MPLM  Live Stage under the TWOQ option, perform below. 
+
+      do {
+          again = true;
+          found = get_queued_page(ms, &npss, &dirty_ram_abs);
+
+          if (!found) {
+              /* priority queue empty, so just search for something dirty */
+              switch(rsb_state){
+                case S0_NonDirty:  // for the first_round_nondirty_option only 
+                  npss.block = last_seen_nondirty_block;
+                  npss.offset = last_nondirty_offset;
+                  npss.complete_round = false;
+
+                  //if(first_time_nondirty_flag){
+                  //  npss.complete_round = false;
+                  //  first_time_nondirty_flag = 0; 
+                  //}
+
+                  if (!npss.block) {
+                    npss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+                    npss.offset = 0;
+                  }
+
+                  found = mplm_find_nondirty_block(f, &npss, &again, &nondirty_ram_abs);
+
+                  if(!found && !again){
+                    printf("S0_NonDirty: Live migration is going to finish\n"); 
+                    fflush(stdout); 
+                  }
+                  else{
+                    if(found){
+                      checked_mplm_nondirty_sent++;
+                      pages = ram_save_host_nondirty_page(ms, f, &npss,
+                                       last_stage, bytes_transferred,
+                                       nondirty_ram_abs);
+		      if(pages != 0){
+                        real_mplm_nondirty_sent++; 
+                      }
+                    }
+                  }
+                  last_seen_nondirty_block = npss.block;
+                  last_nondirty_offset = npss.offset;
+                  break; 
+
+                case S1_NonDirty: 
+                  if(mplm_send_counter < mplm_nondirty_pages_allot){
+                    // finding a non dirty page
+                    npss.block = last_seen_nondirty_block;
+                    npss.offset = last_nondirty_offset;
+                    npss.complete_round = false;
+
+                    if (!npss.block) {
+                      npss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+                      npss.offset = 0;
+                    }
+
+                    found = mplm_find_nondirty_block(f, &npss, &again, &nondirty_ram_abs);
+
+                    if(!found && !again){
+                      printf("S1_NonDirty: Live migration is going to finish\n"); 
+                      fflush(stdout); 
+                    }
+                    else{
+
+                      if(npss.complete_round == true){
+                        // No more non dirty pages.. send dirty until epoch is up.
+                        printf("S1_NonDirty: If dirty page finding reach the end of ram, exit to test the end of live mig\n"); 
+                        fflush(stdout); 
+
+                        //rsb_state = S3_Dirty; 
+                        //pages = 0; // page is already 0 in this case... 
+                        found = false; 
+                        again = false; 
+                      }
+                      else{
+
+                        if(found){
+
+                          mplm_send_counter++; 
+
+                          checked_mplm_nondirty_sent++;
+                          pages = ram_save_host_nondirty_page(ms, f, &npss,
+                                       last_stage, bytes_transferred,
+                                       nondirty_ram_abs);
+		          if(pages != 0){
+                            real_mplm_nondirty_sent++; 
+                          }
+                        }
+                      }
+
+                    }
+
+                    last_seen_nondirty_block = npss.block;
+                    last_nondirty_offset = npss.offset;
+                  }
+                  else{
+                    rsb_state = S2_Dirty; 
+                    found = false; 
+
+                    rsb_xfer_normal_pages_now = acct_info.norm_pages;
+                    rsb_xfer_normal_pages_num = rsb_xfer_normal_pages_now -
+                                 rsb_xfer_normal_pages_last;
+                    rsb_xfer_normal_pages_last = rsb_xfer_normal_pages_now;
+                    rsb_xfer_normal_nondirty_pages += rsb_xfer_normal_pages_num; 
+
+printf("RSB: switch from S1 to S2 normal Nondirty xfer= %" PRId64 " pages \n", 
+      rsb_xfer_normal_pages_num); 
+fflush(stdout);  
+                  }
+
+                  break; 
+
+                case S2_Dirty: 
+
+                  /* 
+                   * Check while the size of hash table of dirty pages is not 0
+                   * and (mplm_send_counter >= mplm_nondirty_pages_allot) and
+                   * (mplm_send_counter < mplm_send_cycle_size) then
+                   * send a dirty page in the dirtypage buffer and clear its dirtybit.
+                   */
+
+                  if((mplm_send_counter >= mplm_nondirty_pages_allot) &&
+                     (mplm_send_counter < mplm_send_cycle_size)){
+
+                      // Do below if there is no page in the dirtypage buffer left.
+                      //if(is_empty_dirtypage_buffer()){}
+
+                      pss.block = last_seen_block;
+                      pss.offset = last_offset;
+                      pss.complete_round = false;
+
+                      if (!pss.block) {
+                        pss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+                      }
+
+                      found = mplm_find_dirty_block(f, &pss, &again, &dirty_ram_abs);
+
+                      if(!found && !again){
+                        printf("RSB: No dirty pages found! Change to do S1_NonDirty! exit loop\n"); 
+                        fflush(stdout); 
+
+                        // reset dirty page scanning...
+                        // set below up in case live mig does not end after mig_bitmap_sync()
+                        pss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+                        pss.offset = 0;
+
+                        mplm_send_counter = 0; 
+                        rsb_state = S1_NonDirty; 
+                        again = true; 
+                      }
+                      else{
+
+                        if(found){
+
+                          mplm_send_counter++; 
+
+                          checked_mplm_dirty_sent++;
+                          pages = ram_save_host_dirty_page(ms, f, &pss,
+                                       last_stage, bytes_transferred,
+                                       dirty_ram_abs);
+
+		          if(pages != 0){ 
+                            real_mplm_dirty_sent++; 
+                          }
+                        }
+                      }
+                      last_seen_block = pss.block;
+                      last_offset = pss.offset;
+                  }
+                  else{
+
+                      mplm_send_counter = 0; 
+                      rsb_state = S1_NonDirty; 
+                      found = false; 
+
+                      rsb_xfer_normal_pages_now = acct_info.norm_pages;
+                      rsb_xfer_normal_pages_num = rsb_xfer_normal_pages_now -
+                                 rsb_xfer_normal_pages_last;
+                      rsb_xfer_normal_pages_last = rsb_xfer_normal_pages_now;
+                      rsb_xfer_normal_dirty_pages += rsb_xfer_normal_pages_num; 
+
+printf("RSB: switch from S2 to S1 normal Dirty xfer= %" PRId64 " pages \n", 
+      rsb_xfer_normal_pages_num); 
+fflush(stdout);  
+                  }
+
+                  break;
+
+                case S3_Dirty: 
+
+                  pss.block = last_seen_block;
+                  pss.offset = last_offset;
+                  pss.complete_round = false;
+
+                  if (!pss.block) {
+                    pss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+                  }
+
+                  do {
+                    again = true;
+                    found = get_queued_page(ms, &pss, &dirty_ram_abs);
+
+                    if (!found) {
+                      /* priority queue empty, so just search for something dirty */
+                      found = find_dirty_block(f, &pss, &again, &dirty_ram_abs);
+
+                      checked_mplm_dirty_sent++; // MPLM
+                    }
+
+                    if (found) {
+                      pages = ram_save_host_dirty_page(ms, f, &pss,
+                                       last_stage, bytes_transferred,
+                                       dirty_ram_abs);
+
+	              if(pages != 0){
+                        real_mplm_dirty_sent++; 
+                        real_mplm_S3_dirty_sent++; 
+                      }
+                    }
+                  } while (!pages && again);
+
+                  last_seen_block = pss.block;
+                  last_offset = pss.offset;
+
+                  break;
+              }
+          }
+
+      } while (!pages && again);
+
+    }
+    else{ // if not MPLM or not during mplm live migration, execute below.
+
+      pss.block = last_seen_block;
+      pss.offset = last_offset;
+      pss.complete_round = false;
+
+      if (!pss.block) {
         pss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+      }
+
+      do {
+          again = true;
+          found = get_queued_page(ms, &pss, &dirty_ram_abs);
+
+          if (!found) {
+              /* priority queue empty, so just search for something dirty */
+              found = find_dirty_block(f, &pss, &again, &dirty_ram_abs);
+
+              checked_mplm_dirty_sent++; // MPLM
+          }
+
+          if (found) {
+              pages = ram_save_host_dirty_page(ms, f, &pss,
+                                       last_stage, bytes_transferred,
+                                       dirty_ram_abs);
+
+	      if(pages != 0){
+                real_mplm_dirty_sent++; 
+                real_mplm_S3_dirty_sent++; 
+              }
+          }
+      } while (!pages && again);
+
+      last_seen_block = pss.block;
+      last_offset = pss.offset;
+
     }
 
-    do {
+    }
+    else{
+      pss.block = last_seen_block;
+      pss.offset = last_offset;
+      pss.complete_round = false;
+
+      if (!pss.block) {
+        pss.block = QLIST_FIRST_RCU(&ram_list.blocks);
+      }
+
+      do {
         again = true;
         found = get_queued_page(ms, &pss, &dirty_ram_abs);
 
@@ -1392,10 +2501,11 @@ static int ram_find_and_save_block(QEMUFile *f, bool last_stage,
                                        last_stage, bytes_transferred,
                                        dirty_ram_abs);
         }
-    } while (!pages && again);
+      } while (!pages && again);
 
-    last_seen_block = pss.block;
-    last_offset = pss.offset;
+      last_seen_block = pss.block;
+      last_offset = pss.offset;
+    }
 
     return pages;
 }
@@ -1480,10 +2590,16 @@ static void ram_migration_cleanup(void *opaque)
 static void reset_ram_globals(void)
 {
     last_seen_block = NULL;
+    last_seen_nondirty_block = NULL; // MPLM
     last_sent_block = NULL;
     last_offset = 0;
+    last_nondirty_offset = 0; // MPLM
     last_version = ram_list.version;
     ram_bulk_stage = true;
+
+// MPLM 
+printf("In reset_ram_globals(): set ram_bulk_stage = true\n"); 
+fflush(stdout); 
 }
 
 #define MAX_WAIT 50 /* ms, half buffered_file limit */
@@ -1839,7 +2955,7 @@ int ram_postcopy_send_discard_bitmap(MigrationState *ms)
     rcu_read_lock();
 
     /* This should be our last sync, the src is now paused */
-    migration_bitmap_sync();
+    migration_bitmap_sync(0);
 
     unsentmap = atomic_rcu_read(&migration_bitmap_rcu)->unsentmap;
     if (!unsentmap) {
@@ -1963,8 +3079,19 @@ static int ram_save_init_globals(void)
     /* Skip setting bitmap if there is no RAM */
     if (ram_bytes_total()) {
         ram_bitmap_pages = last_ram_offset() >> TARGET_PAGE_BITS;
+// MPLM
+        if(mplm_flag){
+            mplm_total_ram_pages = ram_bitmap_pages; 
+        }
+
         migration_bitmap_rcu->bmap = bitmap_new(ram_bitmap_pages);
         bitmap_set(migration_bitmap_rcu->bmap, 0, ram_bitmap_pages);
+// MPLM
+        if(mplm_flag){
+            migration_bitmap_rcu->nondirtybmap = bitmap_new(ram_bitmap_pages);
+            bitmap_set(migration_bitmap_rcu->nondirtybmap, 0, ram_bitmap_pages);
+            mplm_bitmap_sync_flag = 0;
+        }
 
         if (migrate_postcopy_ram()) {
             migration_bitmap_rcu->unsentmap = bitmap_new(ram_bitmap_pages);
@@ -1978,8 +3105,18 @@ static int ram_save_init_globals(void)
      */
     migration_dirty_pages = ram_bytes_total() >> TARGET_PAGE_BITS;
 
+    if(mplm_flag){
+        mplm_num_nondirty_pages = migration_dirty_pages; 
+    }
+
     memory_global_dirty_log_start();
-    migration_bitmap_sync();
+// MPLM
+printf("ram_save_init_global(): mplm_bitmap_sync(1) is called\n"); 
+fflush(stdout); 
+    migration_bitmap_sync(1); // first sync pass 1 as a param
+// MPLM
+printf("ram_save_init_global(): outed mplm_bitmap_sync(1)\n"); 
+fflush(stdout); 
     qemu_mutex_unlock_ramlist();
     qemu_mutex_unlock_iothread();
     rcu_read_unlock();
@@ -2002,6 +3139,11 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
         if (ram_save_init_globals() < 0) {
             return -1;
          }
+    }
+
+    if(mplm_flag){
+    	mplm_wakeup_time.tv_sec = 0;
+    	mplm_wakeup_time.tv_usec = 0;
     }
 
     rcu_read_lock();
@@ -2027,12 +3169,20 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
     return 0;
 }
 
+//MPLM
+int accum_i = 0;  
+
 static int ram_save_iterate(QEMUFile *f, void *opaque)
 {
     int ret;
     int i;
     int64_t t0;
     int done = 0;
+// MPLM
+    //uint8_t  local_debug_flag = 1;
+    uint8_t  local_debug_flag = 0;
+    uint64_t calling_gap = 0;
+    int break_code = 0;
 
     rcu_read_lock();
     if (ram_list.version != last_version) {
@@ -2045,8 +3195,149 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
     ram_control_before_iterate(f, RAM_CONTROL_ROUND);
 
     t0 = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-    i = 0;
-    while ((ret = qemu_file_rate_limit(f)) == 0) {
+// MPLM
+    if(mplm_flag){
+
+      if(local_debug_flag){
+    	if(last_t0 == 0){
+    		calling_gap = 0;
+    	}
+    	else{
+    		calling_gap = (t0 - last_t0) / 1000000;
+    	}
+    	last_t0 = t0;
+      }
+      num_enter_ram_save_iterate++;
+
+      if(mplm_flag){
+    	if(mplm_wakeup_time.tv_sec == 0){ // first time only
+    		// set mplm wake up time
+    		gettimeofday(&mplm_wakeup_time, NULL);
+    		printf("RSI: mplm_wakeup_time sec %"PRId64 " usec %" PRId64 "\n",
+    				mplm_wakeup_time.tv_sec, mplm_wakeup_time.tv_usec);
+    		mplm_wakeup_time.tv_sec = mplm_wakeup_time.tv_sec + mplm_interval;
+    		printf("RSI: mplm_wakeup_time + 3 sec %"PRId64 " usec %" PRId64 "\n",
+    				mplm_wakeup_time.tv_sec, mplm_wakeup_time.tv_usec);
+    		fflush(stdout);
+    	}
+      }
+
+      i = 0;
+      while ((ret = qemu_file_rate_limit(f)) == 0) {
+        int pages;
+
+        pages = ram_find_and_save_block(f, false, &bytes_transferred);
+
+        /* no more pages to sent */
+        if (pages == 0) {
+            done = 1;
+            accum_i = 0; 
+            break_code = 1; // MPLM
+            mplm_bitmap_sync_flag = 1; // this will cause pending to call mig_bit_sync and decide to finish or not
+            printf("RSI: set bitmap sync flag; out of while loop\n"); 
+            fflush(stdout); 
+            break;
+        }
+        acct_info.iterations++;
+
+        /* we want to check in the 1st loop, just in case it was the 1st time
+           and we had to sync the dirty bitmap.
+           qemu_get_clock_ns() is a bit expensive, so we only check each some
+           iterations
+        */
+        if ((i & 63) == 0) {
+
+            uint64_t t1 = (qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - t0) / 1000000;
+            if (t1 > MAX_WAIT) {
+                trace_ram_save_iterate_big_wait(t1, i);
+               	break_code = 2; // MPLM debug
+            }
+
+            // MPLM
+            if(mplm_flag){
+              	struct timeval t_cur;
+              	gettimeofday(&t_cur, NULL);
+
+            	//printf("RSI: %d round: t_cur.tv_sec %" PRId64 " t_cur.tv_usec %" PRId64 "\n",
+           	//		i, t_cur.tv_sec, t_cur.tv_usec);
+            	//fflush(stdout);
+
+               	if((t_cur.tv_sec > mplm_wakeup_time.tv_sec)||
+               	  ((t_cur.tv_sec == mplm_wakeup_time.tv_sec)&&
+               	   (t_cur.tv_usec > mplm_wakeup_time.tv_usec))){
+               	    mplm_wakeup_time.tv_sec = t_cur.tv_sec + mplm_interval;
+               	    mplm_wakeup_time.tv_usec = t_cur.tv_usec;
+
+               	    printf("RSI(i): new mplm_wakeup_time: wake.tv_sec %" PRId64 " wake.tv_usec %" PRId64 "\n",
+                           mplm_wakeup_time.tv_sec, mplm_wakeup_time.tv_usec);
+               	    fflush(stdout);
+
+               	    break_code = 3; // MPLM debug
+               	    mplm_bitmap_sync_flag = 1;
+                    accum_i = 0; 
+                    break; 
+               	}
+                else{
+                    if(break_code == 2){
+                      break; 
+                    }
+                }
+            }
+        }
+        i++;
+        accum_i++; 
+      }
+      flush_compressed_data(f);
+      rcu_read_unlock();
+
+// MPLM
+      if(local_debug_flag){
+    	printf("(RSI: rsi_entry, i, accum_i, gap, bc, ret) [%d, %d, %d, %" PRId64 " ms, %d %d]\n",
+    			num_enter_ram_save_iterate, i, accum_i, calling_gap, break_code, ret);
+    	fflush(stdout);
+      }
+
+    // MPLM: in case that the transmission exceeds max transfer rate limits, 
+    // we check wakeup time every (accum_i & 63) iterations.  
+      if(mplm_flag){
+      if((break_code == 0)&&(ret == 0)&&((accum_i & 63) == 0)){
+          struct timeval t_cur;
+          gettimeofday(&t_cur, NULL);
+
+          if((t_cur.tv_sec > mplm_wakeup_time.tv_sec)||
+            ((t_cur.tv_sec == mplm_wakeup_time.tv_sec)&&
+             (t_cur.tv_usec > mplm_wakeup_time.tv_usec))){
+
+               mplm_wakeup_time.tv_sec = t_cur.tv_sec + mplm_interval;
+               mplm_wakeup_time.tv_usec = t_cur.tv_usec;
+
+               printf("RSI(accum_i): new mplm_wakeup_time: wake.tv_sec %" PRId64 " wake.tv_usec %" PRId64 "\n",
+               			mplm_wakeup_time.tv_sec, mplm_wakeup_time.tv_usec);
+               fflush(stdout);
+
+               break_code = 3; // MPLM debug
+               mplm_bitmap_sync_flag = 1;
+               accum_i = 0; 
+          }
+      }
+      } 
+
+    /*
+     * Must occur before EOS (or any QEMUFile operation)
+     * because of RDMA protocol.
+     */
+      ram_control_after_iterate(f, RAM_CONTROL_ROUND);
+
+      qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
+      bytes_transferred += 8;
+
+      ret = qemu_file_get_error(f);
+      if (ret < 0) {
+        return ret;
+      }
+    } else { // if mplm_flag
+      i = 0;
+      while ((ret = qemu_file_rate_limit(f)) == 0) {
         int pages;
 
         pages = ram_find_and_save_block(f, false, &bytes_transferred);
@@ -2070,22 +3361,24 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
             }
         }
         i++;
-    }
-    flush_compressed_data(f);
-    rcu_read_unlock();
+      }
+      flush_compressed_data(f);
+      rcu_read_unlock();
 
     /*
      * Must occur before EOS (or any QEMUFile operation)
      * because of RDMA protocol.
      */
-    ram_control_after_iterate(f, RAM_CONTROL_ROUND);
+      ram_control_after_iterate(f, RAM_CONTROL_ROUND);
 
-    qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
-    bytes_transferred += 8;
+      qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
+      bytes_transferred += 8;
 
-    ret = qemu_file_get_error(f);
-    if (ret < 0) {
+      ret = qemu_file_get_error(f);
+      if (ret < 0) {
         return ret;
+      }
+
     }
 
     return done;
@@ -2097,7 +3390,13 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     rcu_read_lock();
 
     if (!migration_in_postcopy(migrate_get_current())) {
-        migration_bitmap_sync();
+// MPLM
+printf("ram_save_complete(): mplm_bitmap_sync(0) is called\n"); 
+fflush(stdout); 
+        migration_bitmap_sync(0);
+// MPLM
+printf("ram_save_complete(): mplm_bitmap_sync(0) out\n"); 
+fflush(stdout); 
     }
 
     ram_control_before_iterate(f, RAM_CONTROL_FINISH);
@@ -2126,6 +3425,63 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     return 0;
 }
 
+// The default value is 0.
+int mplm_extend_live_migration_flag = 0; 
+
+extern int qmp_mplm_extend_live_migration; 
+
+int mplm_extend_live_migration(void); 
+
+// This function is called after the main thread checks for 
+// pending ram size. The only place that the mplm_extend_live_mig_flag 
+// changes its value is in the ram_save_pending() function below. 
+
+int mplm_extend_live_migration(void){
+
+    return mplm_extend_live_migration_flag; 
+
+}
+
+// This is for mplm testing only
+//int mplm_testing_i = 0; 
+
+// MPLM
+static int mplm_live_ending_conditions(void){
+
+    // MPLM ending condition. We can use either the current_num_nondirty_pages or 
+    // mplm_num_nondirty_pages for this, but will use the former for now.  
+    // 
+    // The mplm_extend_live_migration_flag == 1 causes this function
+    // to return 0 even though there are no nondirty pages left.   
+    //
+    if(current_num_nondirty_pages == 0){  
+
+// testing
+//if(mplm_testing_i == 5){
+//   qmp_mplm_extend_live_migration = 0; 
+//}
+//else{
+//   mplm_testing_i++; 
+//}
+
+      if(mplm_extend_live_migration_flag){
+
+        rsb_state = S3_Dirty; 
+        return 0; 
+
+      }
+      else{
+
+        rsb_state = S4_LiveMigEnd; 
+        return 1; 
+
+      }
+    }
+    else{
+      return 0;
+    }
+}
+
 static void ram_save_pending(QEMUFile *f, void *opaque, uint64_t max_size,
                              uint64_t *non_postcopiable_pending,
                              uint64_t *postcopiable_pending)
@@ -2134,14 +3490,52 @@ static void ram_save_pending(QEMUFile *f, void *opaque, uint64_t max_size,
 
     remaining_size = ram_save_remaining() * TARGET_PAGE_SIZE;
 
-    if (!migration_in_postcopy(migrate_get_current()) &&
-        remaining_size < max_size) {
-        qemu_mutex_lock_iothread();
-        rcu_read_lock();
-        migration_bitmap_sync();
-        rcu_read_unlock();
-        qemu_mutex_unlock_iothread();
-        remaining_size = ram_save_remaining() * TARGET_PAGE_SIZE;
+    if(mplm_flag){
+        if (!migration_in_postcopy(migrate_get_current()) &&
+    	  ((remaining_size < max_size)||(mplm_bitmap_sync_flag))) {
+
+    	    qemu_mutex_lock_iothread();
+    	    rcu_read_lock();
+// MPLM
+printf("ram_save_pending: mplm_bitmap_sync(0) is called\n"); 
+fflush(stdout); 
+    	    migration_bitmap_sync(0);
+// MPLM
+printf("ram_save_pending: out mplm_bitmap_sync(0)\n"); 
+fflush(stdout); 
+    	    mplm_bitmap_sync_flag = 0; // MPLM reset
+
+                // At this point, the iothread stops, so we copy the value of  
+                // qmp_extend_live_migration_flag variable to our 
+                // mplm_extend_live_migration_flag variable to be used by 
+                // the migration thread. (This avoids race condition.) 
+
+            mplm_extend_live_migration_flag = qmp_mplm_extend_live_migration; 
+
+    	    rcu_read_unlock();
+    	    qemu_mutex_unlock_iothread();
+
+    	    remaining_size = ram_save_remaining() * TARGET_PAGE_SIZE;
+
+            // MPLM ending condition: basically, (!mig_extend)and(no more nondirty)
+            if(mplm_live_ending_conditions()){ 
+                mplm_live_migration_stage_finish = 1;
+                printf("pending: mplm_live_migration_stage_finish is ON\n"); 
+                fflush(stdout); 
+            }
+    	}
+    }
+    else{
+    	if (!migration_in_postcopy(migrate_get_current()) &&
+    	    remaining_size < max_size) {
+
+    	    qemu_mutex_lock_iothread();
+    	    rcu_read_lock();
+    	    migration_bitmap_sync(0);
+    	    rcu_read_unlock();
+    	    qemu_mutex_unlock_iothread();
+    	    remaining_size = ram_save_remaining() * TARGET_PAGE_SIZE;
+    	}
     }
 
     /* We can do postcopy, and all the data is postcopiable */
@@ -2675,3 +4069,59 @@ void ram_mig_init(void)
     qemu_mutex_init(&XBZRLE.lock);
     register_savevm_live(NULL, "ram", 0, 4, &savevm_ram_handlers, NULL);
 }
+
+// MPLM
+int64_t suggested_dirtypage_id_size;
+int change_dirtypage_id_size_flag;
+
+// This should cover 100Mbps speed
+#define MINIMAL_DIRTY_PAGE_ID_SIZE  4096
+
+int64_t dirtypage_id_buffer_size = 0; 
+int64_t *dirtypage_id_buffer = NULL; 
+int64_t front_index = -1; 
+int64_t rear_index = -1; 
+
+void allocate_dirtypage_id_buffer(void);
+
+void allocate_dirtypage_id_buffer(void){
+
+    if(change_dirtypage_id_size_flag){
+
+      // Make sure the circular queue is empty. 
+      //if(!is_empty_dirtypage_buffer()){
+      //  printf("Allocate error: dirtypage_buffer NOT empty. Cannot allocate new buffer.\n"); 
+      //  fflush(stdout); 
+      //  return; 
+      //}
+
+      // free it if already existed.  
+      if(dirtypage_id_buffer) free(dirtypage_id_buffer); 
+      dirtypage_id_buffer = NULL; 
+
+      printf("      **In allocate dirtypage buffer: old size = %" PRId64 " new dirtypage_id_buffer size = %" PRId64 "\n\n", dirtypage_id_buffer_size, suggested_dirtypage_id_size); 
+
+      if((dirtypage_id_buffer = (int64_t *) malloc(sizeof(uint64_t)*suggested_dirtypage_id_size))
+           == NULL){
+        printf("Fatal error: cannot allocate memory for dirtypage id buffer\n"); 
+        fflush(stdout); 
+        exit(1); 
+      } 
+
+      dirtypage_id_buffer_size = suggested_dirtypage_id_size; 
+    }
+}
+/*
+static int is_empty_dirtypage_buffer(void){
+    if(front_index == -1) return 1; 
+    else return 0; 
+}
+
+static int is_full_dirtypage_buffer(void){
+    if((front_index == rear_index + 1)||((front_index == 0)&&
+         (rear_index == dirtypage_id_buffer_size - 1))){
+      return 1; 
+    }
+    else{ return 0; }
+}
+*/
