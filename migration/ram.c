@@ -687,8 +687,8 @@ static void migration_bitmap_sync(void)
         num_dirty_pages_period = 0;
     }
     s->dirty_sync_count = bitmap_sync_count;
-    if (migrate_use_events()) {
-        qapi_event_send_migration_pass(bitmap_sync_count, NULL);
+    if (migrate_use_events() && emit_migration_pass_event) {
+        qapi_event_send_migration_pass(bitmap_sync_count, NULL);   
     }
 }
 

@@ -42,6 +42,9 @@
 /* for vl.c */
 extern int only_migratable;
 
+/* for cpaas*/
+extern bool emit_migration_pass_event;
+
 struct MigrationParams {
     bool blk;
     bool shared;

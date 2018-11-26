@@ -72,7 +72,7 @@
  */
 #define DEFAULT_MIGRATE_X_CHECKPOINT_DELAY 200
 
-#define DEFAULT_MIGRATION_COMPLETION_DELAY 500
+#define NOT_ALLOW_EMIT_MIGRATION_PASS_EVENT_THRESHOLD 500
 
 static NotifierList migration_state_notifiers =
     NOTIFIER_LIST_INITIALIZER(migration_state_notifiers);
@@ -80,6 +80,8 @@ static NotifierList migration_state_notifiers =
 static bool deferred_incoming;
 
 static bool do_migration_completion;
+
+bool emit_migration_pass_event;
 
 /*
  * Current state of incoming postcopy; note this is not part of
@@ -1931,7 +1933,6 @@ static void *migration_thread(void *opaque)
     int64_t max_size = 0;
     int64_t start_time = initial_time;
     int64_t end_time;
-    int64_t last_migration_completion_time;
     bool old_vm_running = false;
     bool entered_postcopy = false;
     /* The active state we expect to be in; ACTIVE or POSTCOPY_ACTIVE */
@@ -1940,7 +1941,7 @@ static void *migration_thread(void *opaque)
     bool precopy_ram_manual_completion = s->enabled_capabilities[MIGRATION_CAPABILITY_PRECOPY_RAM_MANUAL_COMPLETION];
 
     do_migration_completion = false;
-    last_migration_completion_time = -1;
+    emit_migration_pass_event = true;
 
     trace_mplm_print_bool(__FILE__, __LINE__, __PRETTY_FUNCTION__, "precopy_ram_manual_completion", precopy_ram_manual_completion);
 
@@ -2014,19 +2015,12 @@ static void *migration_thread(void *opaque)
                                         &old_vm_running, &start_time);
                         break;
                     } else {
-                        current_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
-                        if (last_migration_completion_time < 0) {
-                            last_migration_completion_time = 
-                                current_time - DEFAULT_MIGRATION_COMPLETION_DELAY;
-                        } 
-
-                        uint64_t diff = current_time - last_migration_completion_time;
-                        last_migration_completion_time = current_time;
-
-                        if (DEFAULT_MIGRATION_COMPLETION_DELAY > diff) {
-                            /* usleep expects microseconds */
-                            g_usleep((DEFAULT_MIGRATION_COMPLETION_DELAY - diff) * 1000);
+                        if (emit_migration_pass_event) {
+                            emit_migration_pass_event = false;
+                            qapi_event_send_cpaas("CAN_STOP", NULL);
                         }
+                        /* Just another iteration step */
+                        qemu_savevm_state_iterate(s->to_dst_file, entered_postcopy);
                     }
                 } else {
                     migration_completion(s, current_active_state,

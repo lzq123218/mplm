@@ -441,6 +441,24 @@
   'data': { 'pass': 'int' } }
 
 ##
+# @CPAAS:
+#
+# Emitted from the source side of a migration.
+#
+# @response: A response text.
+#
+# Since: 2.9.3
+#
+# Example:
+#
+# { "timestamp": {"seconds": 1449669631, "microseconds": 239225},
+#   "event": "CPAAS", "data": {"response": "what ever it will send"} }
+#
+##
+{ 'event': 'CPAAS',
+  'data': { 'response': 'str' } }
+
+##
 # @ACPI_DEVICE_OST:
 #
 # Emitted when guest executes ACPI _OST method.
