@@ -2299,6 +2299,8 @@ extern int64_t xfer_normal_pages_num;
 extern int64_t bytes_xfer_count;
 extern double  bytes_xfer_rate;
 
+int already_extend_live; 
+
 static void *migration_thread(void *opaque)
 {
     MigrationState *s = opaque;
@@ -2324,6 +2326,7 @@ static void *migration_thread(void *opaque)
 
     suggested_dirtypage_id_size = 0;
     change_dirtypage_id_size_flag = 0;
+    already_extend_live = 0; 
     
     rcu_register_thread();
 
@@ -2372,8 +2375,7 @@ static void *migration_thread(void *opaque)
             trace_migrate_pending(pending_size, max_size,
                                   pend_post, pend_nonpost);
 // MPLM
-            if (
-                (mplm_extend_live_migration()) || 
+            if ((!already_extend_live) &&
                 (!(finish_mplm_live_migration()) && pending_size && pending_size >= max_size)
                ) {
 
@@ -2393,6 +2395,34 @@ static void *migration_thread(void *opaque)
                 /* Just another iteration step */
                 qemu_savevm_state_iterate(s->to_dst_file, entered_postcopy);
             } else {
+
+                if(mplm_extend_live_migration()){
+
+                  if(!already_extend_live){
+                    // emit JSON Event here
+                    qapi_event_send_mplm("CAN_STOP", NULL);
+                    already_extend_live = 1; 
+                  }
+
+                  if (migrate_postcopy_ram() &&
+                    s->state != MIGRATION_STATUS_POSTCOPY_ACTIVE &&
+                    pend_nonpost <= max_size &&
+                    atomic_read(&s->start_postcopy)) {
+
+                    if (!postcopy_start(s, &old_vm_running)) {
+                        current_active_state = MIGRATION_STATUS_POSTCOPY_ACTIVE;
+                        entered_postcopy = true;
+                    }
+
+                    continue;
+                  }
+
+                  /* Just another iteration step */
+                  qemu_savevm_state_iterate(s->to_dst_file, entered_postcopy);
+
+                }
+                else{ 
+
                 trace_migration_thread_low_pending(pending_size);
 
 		// MPLM report tx pages
@@ -2452,6 +2482,8 @@ static void *migration_thread(void *opaque)
                 migration_completion(s, current_active_state,
                                      &old_vm_running, &start_time);
                 break;
+
+                } // not extend flag
             }
         }
 
@@ -2687,7 +2719,7 @@ static void *migration_thread(void *opaque)
 
         if(mplm_flag && mplm_live_checkpointing_flag && !entered_postcopy){
             mplm_live_checkpointing_flag = 0; 
-            // old_vm_running = true;
+            old_vm_running = true;
         }
         // run VM after checkpointing
         if (old_vm_running && !entered_postcopy) {
