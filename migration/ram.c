@@ -954,8 +954,20 @@ fflush(stdout);
             (double)((double)(bytes_xfer_count*8)/(double)(bitmap_sync_interval*1000)); 
         }
         else{
-          printf("********** fatal error: user should quit the vm now!\n"); 
+          printf("********** bitmap sync interval is 0!\n"); 
           fflush(stdout); 
+        }
+
+        if (bitmap_sync_interval < 300) {
+            int64_t wait_time = 300 - bitmap_sync_interval;
+
+            printf("wait for wait_time %" PRId64 "\n",wait_time); 
+          fflush(stdout); 
+
+        
+
+            /* usleep expects microseconds */
+            g_usleep(wait_time*1000);
         }
 
         printf("---migration_bitmap_sync(): Last epoch bytes xfer=%" PRId64 " bytes Number xfer NORMAL pages=%" PRId64 " pages, \n------MPLM interval = %" PRId64 " ms\n------Bytes xfer rate=%lf bytes/sec (%lf mbit/sec)\n", 
@@ -2359,18 +2371,31 @@ fflush(stdout);
                         again = true; 
                       }
                       else{
+                          if (found)
+                          {
 
-                        if(found){
+                              mplm_send_counter++;
 
-                          mplm_send_counter++; 
+                              checked_mplm_dirty_sent++;
+                              pages = ram_save_host_dirty_page(ms, f, &pss,
+                                                               last_stage, bytes_transferred,
+                                                               dirty_ram_abs);
 
-                          checked_mplm_dirty_sent++;
-                          pages = ram_save_host_dirty_page(ms, f, &pss,
-                                       last_stage, bytes_transferred,
-                                       dirty_ram_abs);
+                              if (pages != 0)
+                              {
+                                  real_mplm_dirty_sent++;
+                              }
+                        }else{
+                            if (pss.complete_round == true)
+                          {
+                              // No more non dirty pages.. send dirty until epoch is up.
+                              printf("S2_Dirty: If dirty page finding reach the end of ram, exit to test the end of live mig\n");
+                              fflush(stdout);
 
-		          if(pages != 0){ 
-                            real_mplm_dirty_sent++; 
+                              //rsb_state = S3_Dirty;
+                              //pages = 0; // page is already 0 in this case...
+                              found = false;
+                              again = false;
                           }
                         }
                       }

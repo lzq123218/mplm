@@ -2401,6 +2401,8 @@ static void *migration_thread(void *opaque)
                 if(mplm_extend_live_migration()){
 
                   if(!already_extend_live){
+                        printf(":::: CAN_STOP ::::: \n");
+        	            fflush(stdout);
                     // emit JSON Event here
                     qapi_event_send_mplm("CAN_STOP", NULL);
                     already_extend_live = 1; 
