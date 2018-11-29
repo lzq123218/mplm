@@ -2291,6 +2291,7 @@ extern int change_dirtypage_id_size_flag;
 // This should cover 100Mbps speed 
 #define MINIMAL_DIRTYPAGE_ID_SIZE  4096
 
+bool can_emit_migration_pass;
 
 extern void allocate_dirtypage_id_buffer(void); 
 //extern void free_dirtypage_id_buffer(void); 
@@ -2326,7 +2327,8 @@ static void *migration_thread(void *opaque)
 
     suggested_dirtypage_id_size = 0;
     change_dirtypage_id_size_flag = 0;
-    already_extend_live = 0; 
+    already_extend_live = 0;
+    can_emit_migration_pass = true; 
     
     rcu_register_thread();
 
@@ -2402,6 +2404,7 @@ static void *migration_thread(void *opaque)
                     // emit JSON Event here
                     qapi_event_send_mplm("CAN_STOP", NULL);
                     already_extend_live = 1; 
+                    can_emit_migration_pass = false;
                   }
 
                   if (migrate_postcopy_ram() &&
@@ -2719,7 +2722,7 @@ static void *migration_thread(void *opaque)
 
         if(mplm_flag && mplm_live_checkpointing_flag && !entered_postcopy){
             mplm_live_checkpointing_flag = 0; 
-            old_vm_running = true;
+            old_vm_running = false;
         }
         // run VM after checkpointing
         if (old_vm_running && !entered_postcopy) {

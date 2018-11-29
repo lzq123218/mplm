@@ -42,6 +42,8 @@
 /* for vl.c */
 extern int only_migratable;
 
+extern bool can_emit_migration_pass;
+
 struct MigrationParams {
     bool blk;
     bool shared;

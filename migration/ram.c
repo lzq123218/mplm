@@ -1151,7 +1151,7 @@ Adjusted mplm_nondirty_pages_allot %d pages \n-----Reset mplm_send_counter to 0\
         num_dirty_pages_period = 0;
     }
     s->dirty_sync_count = bitmap_sync_count;
-    if (migrate_use_events()) {
+    if (migrate_use_events() && can_emit_migration_pass) {
         qapi_event_send_migration_pass(bitmap_sync_count, NULL);
     }
 
@@ -3463,7 +3463,9 @@ static int mplm_live_ending_conditions(void){
 //else{
 //   mplm_testing_i++; 
 //}
-
+printf("qmp_mplm_extend_live_migration: %d\n",qmp_mplm_extend_live_migration); 
+printf("mplm_extend_live_migration_flag: %d\n",mplm_extend_live_migration_flag); 
+fflush(stdout); 
       if(mplm_extend_live_migration_flag){
 
         rsb_state = S3_Dirty; 
