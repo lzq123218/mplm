@@ -958,13 +958,12 @@ fflush(stdout);
           fflush(stdout); 
         }
 
-        if (bitmap_sync_interval < 300) {
-            int64_t wait_time = 300 - bitmap_sync_interval;
+        int MIN_DELAY_INTERVAL = 100;
+        if (bitmap_sync_interval < MIN_DELAY_INTERVAL) {
+            int64_t wait_time = MIN_DELAY_INTERVAL - bitmap_sync_interval;
 
             printf("wait for wait_time %" PRId64 "\n",wait_time); 
-          fflush(stdout); 
-
-        
+            fflush(stdout); 
 
             /* usleep expects microseconds */
             g_usleep(wait_time*1000);
